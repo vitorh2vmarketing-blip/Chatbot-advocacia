@@ -1,0 +1,321 @@
+// =====================================
+// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO OTIMIZADA
+// =====================================
+require('dotenv').config(); // Recomendado: use um arquivo .env para dados sensíveis
+const qrcode = require("qrcode-terminal");
+const { Client, LocalAuth } = require("whatsapp-web.js");
+const express = require("express");
+const qrcodeImage = require("qrcode");
+
+// =====================================
+// CONFIGURAÇÕES
+// =====================================
+const PORT = process.env.PORT || 3000;
+const API_URL = process.env.WEBHOOK_URL || "https://webhook.site/cc903f72-48a6-47a1-bb06-c89f5c6eefe2";
+
+// Configurações de Horário
+const WORK_HOUR_START = 9;
+const WORK_HOUR_END = 18;
+
+// Tempo para expirar sessão inativa (em milissegundos) -> 1 Hora
+const SESSION_TIMEOUT_MS = 60 * 60 * 1000; 
+
+// =====================================
+// DEPARTAMENTOS
+// =====================================
+const DEPARTMENTS = {
+    1: { 
+        name: "Acidentário / Trabalhista", 
+        responsavel_nome: "Dra. Valéria Daré (Trabalhista)", 
+        responsavel_id: "5534999991111@c.us" 
+    },
+    2: { 
+        name: "Direito Previdenciário", 
+        responsavel_nome: "Dra. Valéria Daré (Previdenciário)", 
+        responsavel_id: "5534999992222@c.us" 
+    }
+};
+
+const GENERAL_ATTENDANCE = {
+    name: "Atendimento Geral",
+    responsavel_nome: "Secretaria",
+    responsavel_id: "5534999990000@c.us"
+};
+
+// =====================================
+// ESTADO E SERVIDOR
+// =====================================
+const app = express();
+let currentQRCode = null;
+let isConnected = false;
+
+// Mapa de sessões: Armazena estado e timestamp da última interação
+// Estrutura: key=phone, value={ step, clientInfo, lastInteraction }
+const userSessions = new Map();
+
+// =====================================
+// FUNÇÕES AUXILIARES
+// =====================================
+
+const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
+
+function isBusinessHours() {
+    const agora = new Date();
+    // Ajuste o fuso horário se o servidor estiver fora do BR (Ex: UTC-3)
+    // agora.setHours(agora.getHours() - 3); 
+    const diaSemana = agora.getDay(); // 0 = Domingo, 6 = Sábado
+    const hora = agora.getHours();
+    return (diaSemana >= 1 && diaSemana <= 5) && (hora >= WORK_HOUR_START && hora < WORK_HOUR_END);
+}
+
+// Limpeza automática de usuários inativos
+setInterval(() => {
+    const now = Date.now();
+    userSessions.forEach((session, key) => {
+        if (now - session.lastInteraction > SESSION_TIMEOUT_MS) {
+            userSessions.delete(key);
+            log(`🧹 Sessão expirada e limpa para: ${key}`);
+        }
+    });
+}, 60000); // Roda a cada 1 minuto
+
+async function enviarDadosParaAPI(dados) {
+    if (API_URL.includes("seu-link")) return;
+    try {
+        log("📤 Enviando dados para Webhook...");
+        // Nota: fetch é nativo no Node 18+. Se usar Node antigo, instale 'node-fetch'
+        await fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(dados)
+        });
+    } catch (error) {
+        console.error("❌ Falha na conexão com a API:", error.message);
+    }
+}
+
+const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+
+// =====================================
+// CLIENTE WHATSAPP
+// =====================================
+const client = new Client({
+    authStrategy: new LocalAuth({ clientId: "valeria_bot" }),
+    // webVersionCache: Mantido pois ajuda na estabilidade atual da lib
+    webVersionCache: {
+        type: 'remote',
+        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+    },
+    puppeteer: {
+        headless: true, // Mudei para true para rodar melhor em servidores (Linux/VPS)
+        args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-accelerated-2d-canvas",
+            "--no-first-run",
+            "--no-zygote",
+            "--disable-gpu",
+            "--disable-extensions"
+        ],
+    },
+});
+
+client.on("qr", (qr) => {
+    currentQRCode = qr;
+    isConnected = false;
+    log("📲 NOVO QR CODE GERADO! Acesse localhost:" + PORT);
+    qrcode.generate(qr, { small: true });
+});
+
+client.on("ready", () => {
+    log("✅ Bot Valéria Daré Conectado!");
+    currentQRCode = null;
+    isConnected = true;
+});
+
+client.on("disconnected", (reason) => {
+    log(`⚠️ Cliente desconectado! Motivo: ${reason}`);
+    isConnected = false;
+    client.initialize();
+});
+
+// =====================================
+// LÓGICA DE MENSAGENS
+// =====================================
+client.on("message", async (msg) => {
+    try {
+        if (!msg.from || msg.from.endsWith("@g.us") || msg.isStatus) return;
+
+        const chat = await msg.getChat();
+        const texto = msg.body.trim();
+        const contactId = msg.from;
+
+        // Recupera sessão ou cria nova
+        let session = userSessions.get(contactId) || { step: 'IDLE', lastInteraction: Date.now() };
+        
+        // Atualiza timestamp da última interação
+        session.lastInteraction = Date.now();
+        userSessions.set(contactId, session);
+
+        // RESET DE FLUXO (Comando para cancelar)
+        if (['cancelar', 'sair', 'reset', 'inicio'].includes(texto.toLowerCase())) {
+            userSessions.delete(contactId);
+            await client.sendMessage(contactId, "🔄 Atendimento reiniciado. Envie um 'Oi' para começar novamente.");
+            return;
+        }
+
+        // Função de resposta humanizada
+        const reply = async (text) => {
+            await chat.sendStateTyping();
+            // Delay dinâmico (mínimo 1s, máximo 4s)
+            const typingTime = Math.min(4000, Math.max(1000, text.length * 40));
+            await delay(typingTime); 
+            await client.sendMessage(contactId, text);
+            await chat.clearState();
+        };
+
+        // -------------------------------------
+        // PASSO 1: INÍCIO / BOAS VINDAS
+        // -------------------------------------
+        if (session.step === 'IDLE') {
+            session.step = 'WAITING_FOR_INFO';
+            userSessions.set(contactId, session);
+            
+            await reply("Olá!");
+            await reply("Você está falando com o assistente virtual do *Escritório Valéria Daré Advocacia*.");
+            await reply("Para iniciarmos, por favor, me informe seu *nome* e um breve resumo do *assunto*.");
+            return;
+        }
+
+        // -------------------------------------
+        // PASSO 2: RECEBE NOME E MOSTRA MENU
+        // -------------------------------------
+        if (session.step === 'WAITING_FOR_INFO') {
+            const infoCliente = texto;
+            
+            // Montagem dinâmica do menu
+            let menu = `Obrigado, recebi suas informações.\n\n` +
+                       `Para falar com o especialista correto, digite o *NÚMERO* da opção abaixo:\n\n`;
+            
+            Object.keys(DEPARTMENTS).forEach(key => {
+                menu += `*${key}* - ${DEPARTMENTS[key].name}\n`;
+            });
+            menu += `*0* - Outros Assuntos`;
+
+            session.step = 'WAITING_FOR_SELECTION';
+            session.clientInfo = infoCliente;
+            userSessions.set(contactId, session);
+
+            await reply(menu);
+            return;
+        }
+
+        // -------------------------------------
+        // PASSO 3: SELEÇÃO E ROTEAMENTO
+        // -------------------------------------
+        if (session.step === 'WAITING_FOR_SELECTION') {
+            // Tenta capturar apenas o número da mensagem (ex: "quero a 1" vira "1")
+            const numeroOpcao = texto.replace(/\D/g, ''); 
+            const opcao = parseInt(numeroOpcao);
+
+            let dept = null;
+
+            if (numeroOpcao === '0' || texto === '0') {
+                dept = GENERAL_ATTENDANCE;
+            } else if (DEPARTMENTS[opcao]) {
+                dept = DEPARTMENTS[opcao];
+            } else {
+                await reply("⚠️ Opção inválida. Por favor, digite apenas o *número* correspondente à área desejada.");
+                return;
+            }
+
+            // Mensagem de Encerramento para o Cliente
+            let msgFinal = `Perfeito! Estou transferindo seu caso para a área de *${dept.name}*.\n\n` +
+                           `O responsável já foi notificado. Por favor, aguarde o retorno.`;
+
+            if (!isBusinessHours()) {
+                msgFinal += `\n\n🕒 *Atenção:* Estamos fora do horário comercial (09h às 18h). Seu atendimento será priorizado no próximo dia útil.`;
+            }
+
+            await reply(msgFinal);
+
+            // -------------------------------------
+            // ROTEAMENTO INTERNO (Notificação Advogado)
+            // -------------------------------------
+            const linkWhats = `https://wa.me/${contactId.replace('@c.us', '')}`;
+            
+            const relatorio = `🚨 *NOVO LEAD: ${dept.name}*\n\n` +
+                              `👤 *Cliente:* ${session.clientInfo}\n` +
+                              `📞 *Whatsapp:* ${linkWhats}\n` +
+                              `📅 *Data:* ${new Date().toLocaleString('pt-BR')}\n\n` +
+                              `💡 *Ação:* Entrar em contato.`;
+
+            log(`Encaminhando lead para: ${dept.responsavel_nome}`);
+
+            // Envia para o advogado
+            if (dept.responsavel_id) {
+                // Pequeno delay para não sobrecarregar
+                setTimeout(async () => {
+                    try {
+                        await client.sendMessage(dept.responsavel_id, relatorio);
+                    } catch (e) {
+                        log(`Erro ao notificar advogado: ${e.message}`);
+                    }
+                }, 2000);
+            }
+
+            // Webhook Integration
+            enviarDadosParaAPI({
+                telefone: contactId.replace('@c.us', ''),
+                info: session.clientInfo,
+                setor: dept.name,
+                timestamp: new Date().toISOString()
+            });
+
+            // Limpa a sessão
+            userSessions.delete(contactId);
+        }
+
+    } catch (error) {
+        log(`❌ Erro Crítico: ${error}`);
+    }
+});
+
+// =====================================
+// SERVIDOR WEB (MONITORAMENTO)
+// =====================================
+app.get('/', async (req, res) => {
+    const refreshScript = `<script>setTimeout(function(){location.reload()}, 10000);</script>`;
+    
+    if (isConnected) {
+        res.send(`
+            <div style="font-family:sans-serif; text-align:center; padding:20px; color: green;">
+                <h1>✅ WhatsApp Conectado!</h1>
+                <p>Bot Valéria Daré operando normalmente.</p>
+            </div>
+        `);
+    } else if (currentQRCode) {
+        try {
+            const url = await qrcodeImage.toDataURL(currentQRCode);
+            res.send(`
+                <div style="font-family:sans-serif; text-align:center; padding:20px;">
+                    <h1>📲 Escaneie o QR Code</h1>
+                    <img src="${url}" width="300"/>
+                    <p>A página atualiza automaticamente.</p>
+                    ${refreshScript}
+                </div>
+            `);
+        } catch (err) {
+            res.send('Erro ao gerar imagem.');
+        }
+    } else {
+        res.send(`<div style="font-family:sans-serif; text-align:center; padding:20px;"><h1>🔄 Inicializando...</h1><p>Aguarde...</p>${refreshScript}</div>`);
+    }
+});
+
+app.listen(PORT, () => {
+    log(`🌐 Servidor Web rodando em: http://localhost:${PORT}`);
+});
+
+client.initialize();
