@@ -1,5 +1,5 @@
-// =====================================// =====================================
-// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO OTIMIZADA
+// =====================================
+// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO RAILWAY
 // =====================================
 require('dotenv').config(); 
 const qrcode = require("qrcode-terminal");
@@ -90,28 +90,30 @@ const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 // CLIENTE WHATSAPP
 // =====================================
 
-// Tenta encontrar o Chrome no Windows (MANTIDO PARA EVITAR ERROS DE CONTEXTO)
+// 1. Lista de caminhos do Windows
 const chromePaths = [
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Users\\' + (process.env.USERNAME || 'Administrator') + '\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe'
 ];
 
-const executablePath = chromePaths.find(path => fs.existsSync(path));
+// 2. Tenta achar no Windows OU usa a variável de ambiente do Docker/Railway (Linux)
+// Essa é a correção principal: "|| process.env.PUPPETEER_EXECUTABLE_PATH"
+const executablePath = chromePaths.find(path => fs.existsSync(path)) || process.env.PUPPETEER_EXECUTABLE_PATH;
 
 if (executablePath) {
-    log(`🖥️ Chrome encontrado em: ${executablePath}`);
+    log(`🖥️ Navegador definido em: ${executablePath}`);
 } else {
-    log(`⚠️ Chrome não encontrado. Usando Chromium do Puppeteer.`);
+    log(`⚠️ Navegador não encontrado. O Puppeteer tentará usar a versão padrão.`);
 }
 
 const client = new Client({
     authStrategy: new LocalAuth({ clientId: "valeria_bot" }),
-    // Configurações de estabilidade
-    authTimeoutMs: 60000, 
+    // Aumentei o timeout para evitar erro na inicialização lenta da nuvem
+    authTimeoutMs: 120000, 
     puppeteer: {
-        headless: true, // O navegador vai abrir para você ver
-        executablePath: executablePath, // Usa o seu Chrome para não travar
+        headless: true, // Obrigatório na Railway
+        executablePath: executablePath, 
         args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",
@@ -119,6 +121,7 @@ const client = new Client({
             "--disable-accelerated-2d-canvas",
             "--no-first-run",
             "--no-zygote",
+            "--single-process", // Ajuda a não estourar memória na Railway
             "--disable-gpu",
             "--disable-extensions",
             "--disable-software-rasterizer"
@@ -214,7 +217,6 @@ client.on("message", async (msg) => {
                 nomeParaSalvar = nomeFormatado;
             }
 
-            // ATUALIZADO CONFORME PEDIDO
             let menu = `Certo${saudacaoPersonalizada}! No que podemos te ajudar?\n\n` +
                         `Por gentileza, digite o NÚMERO da opção desejada:\n\n`;
             
@@ -243,7 +245,6 @@ client.on("message", async (msg) => {
             } else if (DEPARTMENTS[opcao]) {
                 dept = DEPARTMENTS[opcao];
             } else {
-                // ATUALIZADO CONFORME PEDIDO
                 await reply("Me desculpe, não entendi. Poderia por gentileza escolher o número da opção desejada?");
                 return;
             }
@@ -253,7 +254,6 @@ client.on("message", async (msg) => {
             userSessions.set(contactId, session);
 
             const nome = session.clientName || "Cliente";
-            // ATUALIZADO CONFORME PEDIDO
             await reply(`${nome}, se você pudesse resumir em poucas palavras a escolha desse assunto, qual seria?`);
             return;
         }
@@ -263,7 +263,6 @@ client.on("message", async (msg) => {
             const motivo = texto; 
             const dept = session.selectedDept;
 
-            // ATUALIZADO CONFORME PEDIDO
             let msgFinal = `Perfeito! Já estamos te transferindo para um de nossos Doutores do *${dept.name}*.\n\n` +
                            `Aguarde um momento, por favor.`;
 
@@ -329,8 +328,9 @@ app.get('/', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    log(`🌐 Servidor Web rodando em: http://localhost:${PORT}`);
+// Listener modificado para "0.0.0.0" (Crucial para Railway expor a porta)
+app.listen(PORT, '0.0.0.0', () => {
+    log(`🌐 Servidor Web rodando em: http://0.0.0.0:${PORT}`);
 });
 
 process.on('SIGINT', async () => {
