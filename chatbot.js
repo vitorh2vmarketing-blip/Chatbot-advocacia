@@ -110,7 +110,7 @@ const client = new Client({
     // Configurações de estabilidade
     authTimeoutMs: 60000, 
     puppeteer: {
-        headless: false, // O navegador vai abrir para você ver
+        headless: true, // O navegador vai abrir para você ver
         executablePath: executablePath, // Usa o seu Chrome para não travar
         args: [
             "--no-sandbox",
@@ -338,5 +338,6 @@ process.on('SIGINT', async () => {
     try { await client.destroy(); } catch (e) {}
     process.exit(0);
 });
+
 
 client.initialize().catch(err => log(`❌ Erro fatal: ${err.message}`));
