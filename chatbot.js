@@ -1,4 +1,4 @@
-// =====================================
+// =====================================// =====================================
 // BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO OTIMIZADA
 // =====================================
 require('dotenv').config(); 
@@ -338,6 +338,5 @@ process.on('SIGINT', async () => {
     try { await client.destroy(); } catch (e) {}
     process.exit(0);
 });
-
 
 client.initialize().catch(err => log(`❌ Erro fatal: ${err.message}`));
