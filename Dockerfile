@@ -1,27 +1,29 @@
-FROM node:18FROM node:18
+FROM node:18FROM node:18# Usa a imagem oficial do Puppeteer (já vem com Chrome e Node prontos)
+FROM ghcr.io/puppeteer/puppeteer:latest
 
-# Instala o Google Chrome Stable.
-# Ao instalar o navegador real, ele puxa automaticamente todas as bibliotecas de sistema.
-RUN apt-get update && apt-get install -y wget gnupg \
-    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
-    && sh -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list' \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable fonts-ipafont-gothic fonts-wqy-zenhei fonts-thai-tlwg fonts-kacst fonts-freefont-ttf libxss1 \
-      --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
-
-# OTIMIZAÇÃO: Diz para o Puppeteer NÃO baixar o Chromium (usa o Chrome instalado acima)
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
-
-# Configura a pasta do robô
+# Define que vamos mexer nos arquivos como administrador (root)
+USER root
 WORKDIR /app
 
-# Copia os arquivos e instala o bot
+# Copia os arquivos de configuração
 COPY package*.json ./
-RUN npm install
 
+# Instala as dependências do seu robô
+# A flag --ignore-scripts impede que o puppeteer tente baixar o Chrome de novo (já temos na imagem)
+RUN npm install --ignore-scripts
+
+# Copia o resto do código
 COPY . .
 
-# Comando para iniciar
+# Importante: Dá permissão para o usuário do sistema escrever na pasta
+# (Isso é crucial para salvar o arquivo de sessão do WhatsApp .wwebjs_auth)
+RUN chown -R pptruser:pptruser /app
+
+# Define a variável de ambiente para garantir que o robô ache o Chrome da imagem
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+
+# Volta para o usuário padrão de segurança do Puppeteer
+USER pptruser
+
+# Inicia o robô
 CMD ["node", "index.js"]
