@@ -19,6 +19,9 @@ const WORK_HOUR_START = 9;
 const WORK_HOUR_END = 18;
 const SESSION_TIMEOUT_MS = 60 * 60 * 1000; 
 
+// Marca o horário exato que o robô ligou (para ignorar mensagens velhas)
+const BOT_START_TIMESTAMP = Math.floor(Date.now() / 1000);
+
 // =====================================
 // DEPARTAMENTOS
 // =====================================
@@ -112,6 +115,11 @@ const client = new Client({
         clientId: "valeria_bot",
         dataPath: path.resolve(__dirname, '.wwebjs_auth') 
     }),
+    // OTIMIZAÇÃO: Usa uma versão fixa do WA Web para carregar mais rápido e não travar
+    webVersionCache: {
+        type: 'remote',
+        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+    },
     authTimeoutMs: 120000, 
     puppeteer: {
         headless: true, // Obrigatório na Railway
@@ -180,6 +188,12 @@ client.on("disconnected", (reason) => {
 // =====================================
 client.on("message", async (msg) => {
     try {
+        // --- FILTRO DE TEMPO (IGNORA MENSAGENS ANTIGAS) ---
+        if (msg.timestamp < BOT_START_TIMESTAMP) {
+            // Se a mensagem for mais velha que o momento que o robô ligou, ignora.
+            return; 
+        }
+
         // --- PROTEÇÃO DE INICIALIZAÇÃO ---
         if (!isReady) {
             console.log(`⏳ Recebi mensagem de ${msg.from}, mas ainda estou carregando (Sync). Ignorando por segurança.`);
