@@ -1,5 +1,5 @@
 // =====================================
-// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO RAILWAY
+// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO RAILWAY DEBUG
 // =====================================
 require('dotenv').config(); 
 const qrcode = require("qrcode-terminal");
@@ -90,15 +90,13 @@ const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 // CLIENTE WHATSAPP
 // =====================================
 
-// 1. Lista de caminhos do Windows
+// Lógica Híbrida: Tenta achar no Windows OU usa a variável de ambiente do Docker/Railway (Linux)
 const chromePaths = [
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Users\\' + (process.env.USERNAME || 'Administrator') + '\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe'
 ];
 
-// 2. Tenta achar no Windows OU usa a variável de ambiente do Docker/Railway (Linux)
-// Essa é a correção principal: "|| process.env.PUPPETEER_EXECUTABLE_PATH"
 const executablePath = chromePaths.find(path => fs.existsSync(path)) || process.env.PUPPETEER_EXECUTABLE_PATH;
 
 if (executablePath) {
@@ -109,7 +107,6 @@ if (executablePath) {
 
 const client = new Client({
     authStrategy: new LocalAuth({ clientId: "valeria_bot" }),
-    // Aumentei o timeout para evitar erro na inicialização lenta da nuvem
     authTimeoutMs: 120000, 
     puppeteer: {
         headless: true, // Obrigatório na Railway
@@ -121,10 +118,8 @@ const client = new Client({
             "--disable-accelerated-2d-canvas",
             "--no-first-run",
             "--no-zygote",
-            "--single-process", // Ajuda a não estourar memória na Railway
-            "--disable-gpu",
-            "--disable-extensions",
-            "--disable-software-rasterizer"
+            "--single-process", 
+            "--disable-gpu"
         ],
     },
 });
@@ -156,6 +151,10 @@ client.on("disconnected", (reason) => {
 // =====================================
 client.on("message", async (msg) => {
     try {
+        // --- ÁREA DE DEBUG (NOVO) ---
+        // Isso vai mostrar no Log da Railway se a mensagem chegou, mesmo que o bot não responda.
+        console.log(`📩 Debug: Mensagem de ${msg.from}: "${msg.body}"`);
+
         if (!msg.from || msg.from.endsWith("@g.us") || msg.isStatus) return;
         if (msg.type === 'sticker') return;
 
@@ -168,6 +167,7 @@ client.on("message", async (msg) => {
         session.lastInteraction = Date.now();
         userSessions.set(contactId, session);
 
+        // Reset global
         if (['cancelar', 'sair', 'reset', 'inicio', 'encerrar'].includes(lowerText)) {
             userSessions.delete(contactId);
             await client.sendMessage(contactId, "🔄 Atendimento reiniciado. Envie um 'Oi' quando precisar.");
@@ -184,10 +184,16 @@ client.on("message", async (msg) => {
             await chat.clearState();
         };
 
-        // PASSO 1: INÍCIO
+        // PASSO 1: INÍCIO (Corrigido para ser mais flexível)
         if (session.step === 'IDLE') {
-            const saudacoesRegex = /^(oi|oi!|ooi|opa|dia|tarde|noite|Boa tarde!|bom|boa|dra|tudo bem|tudo|bem|Hi|olá|ola|bom dia!|bom dia|boa tarde|boa noite|bomdia|boanoite|boatarde|tarde!|boa tarde!|boa noite!|oii|olaa|opa!)$/i;
-            if (!saudacoesRegex.test(texto)) return;
+            // Removemos o ^ e $ para aceitar frases como "Oi tudo bem"
+            // Adicionamos mais variações comuns
+            const saudacoesRegex = /(oi|olá|ola|bom dia|boa tarde|boa noite|tarde|dia|noite|opa|tudo bem|bot|ajuda)/i;
+            
+            if (!saudacoesRegex.test(texto)) {
+                console.log(`🔇 Ignorando mensagem fora do padrão: "${texto}"`);
+                return;
+            }
 
             session.step = 'WAITING_FOR_INFO';
             userSessions.set(contactId, session);
@@ -204,10 +210,7 @@ client.on("message", async (msg) => {
             const primeiroPalavra = infoCliente.split(/[\s,]+/)[0];
             let nomeFormatado = primeiroPalavra.charAt(0).toUpperCase() + primeiroPalavra.slice(1).toLowerCase();
 
-            const palavrasIgnoradas = [
-                'oi', 'olá', 'ola', 'bom', 'boa', 'gostaria', 'queria', 'preciso', 'estou', 
-                'sou', 'meu', 'não', 'nao', 'quero', 'assunto', 'sobre', 'tenho', 'necessito', 'favor'
-            ];
+            const palavrasIgnoradas = ['oi', 'olá', 'ola', 'bom', 'boa', 'gostaria', 'queria', 'preciso', 'estou', 'sou', 'meu', 'não', 'nao', 'quero', 'assunto', 'sobre', 'tenho', 'necessito', 'favor'];
             
             let saudacaoPersonalizada = "";
             let nomeParaSalvar = "Cliente"; 
@@ -328,7 +331,6 @@ app.get('/', async (req, res) => {
     }
 });
 
-// Listener modificado para "0.0.0.0" (Crucial para Railway expor a porta)
 app.listen(PORT, '0.0.0.0', () => {
     log(`🌐 Servidor Web rodando em: http://0.0.0.0:${PORT}`);
 });
@@ -340,4 +342,3 @@ process.on('SIGINT', async () => {
 });
 
 client.initialize().catch(err => log(`❌ Erro fatal: ${err.message}`));
-
