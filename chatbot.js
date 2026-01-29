@@ -1,5 +1,5 @@
 // =====================================
-// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO RAILWAY DEBUG
+// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO RAILWAY DEBUG FINAL
 // =====================================
 require('dotenv').config(); 
 const qrcode = require("qrcode-terminal");
@@ -7,6 +7,7 @@ const { Client, LocalAuth } = require("whatsapp-web.js");
 const express = require("express");
 const qrcodeImage = require("qrcode");
 const fs = require('fs');
+const path = require('path');
 
 // =====================================
 // CONFIGURAÇÕES
@@ -97,7 +98,7 @@ const chromePaths = [
     'C:\\Users\\' + (process.env.USERNAME || 'Administrator') + '\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe'
 ];
 
-const executablePath = chromePaths.find(path => fs.existsSync(path)) || process.env.PUPPETEER_EXECUTABLE_PATH;
+const executablePath = chromePaths.find(p => fs.existsSync(p)) || process.env.PUPPETEER_EXECUTABLE_PATH;
 
 if (executablePath) {
     log(`🖥️ Navegador definido em: ${executablePath}`);
@@ -106,7 +107,11 @@ if (executablePath) {
 }
 
 const client = new Client({
-    authStrategy: new LocalAuth({ clientId: "valeria_bot" }),
+    // FIX: Define explicitamente o caminho e id para evitar erros de permissão no Linux
+    authStrategy: new LocalAuth({ 
+        clientId: "valeria_bot",
+        dataPath: path.resolve(__dirname, '.wwebjs_auth') 
+    }),
     authTimeoutMs: 120000, 
     puppeteer: {
         headless: true, // Obrigatório na Railway
@@ -124,6 +129,24 @@ const client = new Client({
     },
 });
 
+// --- LOGS DE DIAGNÓSTICO (IMPORTANTE PARA DEBUGS NA NUVEM) ---
+
+client.on('loading_screen', (percent, message) => {
+    log(`⏳ Sincronizando WhatsApp: ${percent}% - ${message}`);
+});
+
+client.on('authenticated', () => {
+    log('🔐 Autenticado com sucesso!');
+});
+
+client.on('auth_failure', msg => {
+    log(`❌ Falha na autenticação: ${msg}`);
+});
+
+client.on('change_state', state => {
+    log(`🔄 Status da conexão mudou para: ${state}`);
+});
+
 client.on("qr", (qr) => {
     currentQRCode = qr;
     isConnected = false;
@@ -132,7 +155,7 @@ client.on("qr", (qr) => {
 });
 
 client.on("ready", () => {
-    log("✅ Bot Valéria Daré Conectado!");
+    log("✅ Bot Valéria Daré Conectado e PRONTO PARA RESPONDER!");
     currentQRCode = null;
     isConnected = true;
 });
@@ -140,6 +163,9 @@ client.on("ready", () => {
 client.on("disconnected", (reason) => {
     log(`⚠️ Cliente desconectado! Motivo: ${reason}`);
     isConnected = false;
+    // Força limpeza da pasta de auth se desconectar por motivo grave
+    // fs.rmSync(path.resolve(__dirname, '.wwebjs_auth'), { recursive: true, force: true });
+    
     setTimeout(() => {
         log("🔄 Tentando reconectar automaticamente...");
         client.initialize().catch(err => log(`Erro ao tentar reconectar: ${err.message}`));
@@ -155,7 +181,11 @@ client.on("message", async (msg) => {
         // Isso vai mostrar no Log da Railway se a mensagem chegou, mesmo que o bot não responda.
         console.log(`📩 Debug: Mensagem de ${msg.from}: "${msg.body}"`);
 
-        if (!msg.from || msg.from.endsWith("@g.us") || msg.isStatus) return;
+        // Evita responder status, grupos ou a si mesmo
+        if (!msg.from || msg.from.includes("status") || msg.from.includes("g.us") || msg.from === client.info.wid._serialized) {
+            return;
+        }
+        
         if (msg.type === 'sticker') return;
 
         const chat = await msg.getChat();
@@ -186,8 +216,6 @@ client.on("message", async (msg) => {
 
         // PASSO 1: INÍCIO (Corrigido para ser mais flexível)
         if (session.step === 'IDLE') {
-            // Removemos o ^ e $ para aceitar frases como "Oi tudo bem"
-            // Adicionamos mais variações comuns
             const saudacoesRegex = /(oi|olá|ola|bom dia|boa tarde|boa noite|tarde|dia|noite|opa|tudo bem|bot|ajuda)/i;
             
             if (!saudacoesRegex.test(texto)) {
