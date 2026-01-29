@@ -186,7 +186,7 @@ client.on("message", async (msg) => {
 
         // PASSO 1: INÍCIO
         if (session.step === 'IDLE') {
-            const saudacoesRegex = /^(oi|oi!|ooi|opa|dia|tarde|noite|Boa tarde!|bom|boa|dra|tudo bem|tudo|bem|Hi|olá|ola|bom dia!|bom dia|boa tarde|boa noite|bomdia|boanoite|boatarde|tarde!|boa tarde!|boa noite!|oii|olaa)$/i;
+            const saudacoesRegex = /^(oi|oi!|ooi|opa|dia|tarde|noite|Boa tarde!|bom|boa|dra|tudo bem|tudo|bem|Hi|olá|ola|bom dia!|bom dia|boa tarde|boa noite|bomdia|boanoite|boatarde|tarde!|boa tarde!|boa noite!|oii|olaa|opa!)$/i;
             if (!saudacoesRegex.test(texto)) return;
 
             session.step = 'WAITING_FOR_INFO';
@@ -340,3 +340,4 @@ process.on('SIGINT', async () => {
 });
 
 client.initialize().catch(err => log(`❌ Erro fatal: ${err.message}`));
+
