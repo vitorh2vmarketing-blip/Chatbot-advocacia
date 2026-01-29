@@ -1,5 +1,5 @@
 // =====================================
-// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO RAILWAY (FIX LOOP DE MEMÓRIA)
+// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO RAILWAY (FIX LOOP SYNC)
 // =====================================
 require('dotenv').config(); 
 const qrcode = require("qrcode-terminal");
@@ -23,11 +23,10 @@ const SESSION_TIMEOUT_MS = 60 * 60 * 1000;
 const BOT_START_TIMESTAMP = Math.floor(Date.now() / 1000);
 
 // --- LIMPEZA DE EMERGÊNCIA (FIX LOOP) ---
-// Se a pasta de sessão existir, apaga ela para garantir uma conexão limpa e evitar o loop de memória.
-// O QR Code será gerado novamente.
+// Apaga a sessão anterior para garantir que a nova versão do WhatsApp Web seja carregada do zero.
 const authPath = path.resolve(__dirname, '.wwebjs_auth');
 if (fs.existsSync(authPath)) {
-    console.log("🧹 [FIX] Apagando sessão antiga para corrigir loop de autenticação...");
+    console.log("🧹 [FIX] Apagando sessão antiga para aplicar correção de versão...");
     fs.rmSync(authPath, { recursive: true, force: true });
 }
 
@@ -104,7 +103,6 @@ const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 // CLIENTE WHATSAPP
 // =====================================
 
-// Lógica Híbrida: Tenta achar no Windows OU usa a variável de ambiente do Docker/Railway (Linux)
 const chromePaths = [
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
@@ -124,8 +122,14 @@ const client = new Client({
         clientId: "valeria_bot",
         dataPath: authPath
     }),
-    // REMOVIDO: webVersionCache (Deixamos o padrão para evitar incompatibilidade)
-    authTimeoutMs: 180000, // Aumentado para 3 minutos
+    // === CORREÇÃO CRÍTICA ===
+    // Força uma versão antiga e estável do WhatsApp Web.
+    // Isso evita que o bot fique travado em "Sincronizando 99%".
+    webVersionCache: {
+        type: 'remote',
+        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+    },
+    authTimeoutMs: 180000, 
     qrMaxRetries: 5,
     puppeteer: {
         headless: true, // Obrigatório na Railway
@@ -133,7 +137,7 @@ const client = new Client({
         args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage", // Crítico para evitar crash de memória
+            "--disable-dev-shm-usage", 
             "--disable-accelerated-2d-canvas",
             "--no-first-run",
             "--no-zygote",
