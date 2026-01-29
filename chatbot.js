@@ -1,5 +1,5 @@
 // =====================================
-// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO RAILWAY FINAL STABLE
+// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO RAILWAY (FIX LOOP DE MEMÓRIA)
 // =====================================
 require('dotenv').config(); 
 const qrcode = require("qrcode-terminal");
@@ -21,6 +21,15 @@ const SESSION_TIMEOUT_MS = 60 * 60 * 1000;
 
 // Marca o horário exato que o robô ligou (para ignorar mensagens velhas)
 const BOT_START_TIMESTAMP = Math.floor(Date.now() / 1000);
+
+// --- LIMPEZA DE EMERGÊNCIA (FIX LOOP) ---
+// Se a pasta de sessão existir, apaga ela para garantir uma conexão limpa e evitar o loop de memória.
+// O QR Code será gerado novamente.
+const authPath = path.resolve(__dirname, '.wwebjs_auth');
+if (fs.existsSync(authPath)) {
+    console.log("🧹 [FIX] Apagando sessão antiga para corrigir loop de autenticação...");
+    fs.rmSync(authPath, { recursive: true, force: true });
+}
 
 // =====================================
 // DEPARTAMENTOS
@@ -50,7 +59,7 @@ const GENERAL_ATTENDANCE = {
 const app = express();
 let currentQRCode = null;
 let isConnected = false;
-let isReady = false; // Nova variável para controlar se já pode responder
+let isReady = false; 
 const userSessions = new Map();
 
 // =====================================
@@ -113,21 +122,18 @@ if (executablePath) {
 const client = new Client({
     authStrategy: new LocalAuth({ 
         clientId: "valeria_bot",
-        dataPath: path.resolve(__dirname, '.wwebjs_auth') 
+        dataPath: authPath
     }),
-    // OTIMIZAÇÃO: Usa uma versão fixa do WA Web para carregar mais rápido e não travar
-    webVersionCache: {
-        type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
-    },
-    authTimeoutMs: 120000, 
+    // REMOVIDO: webVersionCache (Deixamos o padrão para evitar incompatibilidade)
+    authTimeoutMs: 180000, // Aumentado para 3 minutos
+    qrMaxRetries: 5,
     puppeteer: {
         headless: true, // Obrigatório na Railway
         executablePath: executablePath, 
         args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
+            "--disable-dev-shm-usage", // Crítico para evitar crash de memória
             "--disable-accelerated-2d-canvas",
             "--no-first-run",
             "--no-zygote",
@@ -145,7 +151,7 @@ client.on('loading_screen', (percent, message) => {
 });
 
 client.on('authenticated', () => {
-    log('🔐 Autenticado com sucesso! Aguardando carregamento final...');
+    log('🔐 Autenticado com sucesso! Aguardando o carregamento final...');
 });
 
 client.on('auth_failure', msg => {
@@ -164,7 +170,7 @@ client.on("ready", () => {
     log("✅ Bot Valéria Daré Conectado e PRONTO PARA RESPONDER!");
     currentQRCode = null;
     isConnected = true;
-    isReady = true; // SINAL VERDE: Agora pode responder
+    isReady = true; 
     
     // Heartbeat
     setInterval(() => {
@@ -176,6 +182,13 @@ client.on("disconnected", (reason) => {
     log(`⚠️ Cliente desconectado! Motivo: ${reason}`);
     isConnected = false;
     isReady = false;
+    
+    // Se desconectar, tenta limpar a sessão para garantir reconexão limpa
+    try {
+        if (fs.existsSync(authPath)) {
+            fs.rmSync(authPath, { recursive: true, force: true });
+        }
+    } catch(e) {}
     
     setTimeout(() => {
         log("🔄 Tentando reconectar automaticamente...");
@@ -190,13 +203,12 @@ client.on("message", async (msg) => {
     try {
         // --- FILTRO DE TEMPO (IGNORA MENSAGENS ANTIGAS) ---
         if (msg.timestamp < BOT_START_TIMESTAMP) {
-            // Se a mensagem for mais velha que o momento que o robô ligou, ignora.
             return; 
         }
 
         // --- PROTEÇÃO DE INICIALIZAÇÃO ---
         if (!isReady) {
-            console.log(`⏳ Recebi mensagem de ${msg.from}, mas ainda estou carregando (Sync). Ignorando por segurança.`);
+            console.log(`⏳ Recebi mensagem de ${msg.from}, mas ainda estou carregando (Sync). Ignorando.`);
             return;
         }
 
@@ -208,7 +220,6 @@ client.on("message", async (msg) => {
         if (msg.from.includes("status")) return;
         if (msg.from.includes("g.us")) return;
 
-        // FIX: Verifica se client.info existe antes de comparar (evita crash na inicialização)
         if (client.info && client.info.wid && msg.from === client.info.wid._serialized) {
              console.log(`🔇 Ignorado: Mensagem enviada por mim mesmo.`);
              return;
