@@ -1,5 +1,5 @@
 // =====================================
-// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO RAILWAY DEBUG FINAL
+// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO RAILWAY FINAL STABLE
 // =====================================
 require('dotenv').config(); 
 const qrcode = require("qrcode-terminal");
@@ -47,6 +47,7 @@ const GENERAL_ATTENDANCE = {
 const app = express();
 let currentQRCode = null;
 let isConnected = false;
+let isReady = false; // Nova variável para controlar se já pode responder
 const userSessions = new Map();
 
 // =====================================
@@ -107,7 +108,6 @@ if (executablePath) {
 }
 
 const client = new Client({
-    // FIX: Define explicitamente o caminho e id para evitar erros de permissão no Linux
     authStrategy: new LocalAuth({ 
         clientId: "valeria_bot",
         dataPath: path.resolve(__dirname, '.wwebjs_auth') 
@@ -129,27 +129,25 @@ const client = new Client({
     },
 });
 
-// --- LOGS DE DIAGNÓSTICO (IMPORTANTE PARA DEBUGS NA NUVEM) ---
+// --- LOGS DE DIAGNÓSTICO ---
 
 client.on('loading_screen', (percent, message) => {
     log(`⏳ Sincronizando WhatsApp: ${percent}% - ${message}`);
+    isReady = false;
 });
 
 client.on('authenticated', () => {
-    log('🔐 Autenticado com sucesso!');
+    log('🔐 Autenticado com sucesso! Aguardando carregamento final...');
 });
 
 client.on('auth_failure', msg => {
     log(`❌ Falha na autenticação: ${msg}`);
 });
 
-client.on('change_state', state => {
-    log(`🔄 Status da conexão mudou para: ${state}`);
-});
-
 client.on("qr", (qr) => {
     currentQRCode = qr;
     isConnected = false;
+    isReady = false;
     log("📲 NOVO QR CODE: Acesse http://localhost:" + PORT);
     qrcode.generate(qr, { small: true });
 });
@@ -158,13 +156,18 @@ client.on("ready", () => {
     log("✅ Bot Valéria Daré Conectado e PRONTO PARA RESPONDER!");
     currentQRCode = null;
     isConnected = true;
+    isReady = true; // SINAL VERDE: Agora pode responder
+    
+    // Heartbeat
+    setInterval(() => {
+        log("💓 Bot ativo e aguardando mensagens...");
+    }, 60000);
 });
 
 client.on("disconnected", (reason) => {
     log(`⚠️ Cliente desconectado! Motivo: ${reason}`);
     isConnected = false;
-    // Força limpeza da pasta de auth se desconectar por motivo grave
-    // fs.rmSync(path.resolve(__dirname, '.wwebjs_auth'), { recursive: true, force: true });
+    isReady = false;
     
     setTimeout(() => {
         log("🔄 Tentando reconectar automaticamente...");
@@ -177,13 +180,24 @@ client.on("disconnected", (reason) => {
 // =====================================
 client.on("message", async (msg) => {
     try {
-        // --- ÁREA DE DEBUG (NOVO) ---
-        // Isso vai mostrar no Log da Railway se a mensagem chegou, mesmo que o bot não responda.
+        // --- PROTEÇÃO DE INICIALIZAÇÃO ---
+        if (!isReady) {
+            console.log(`⏳ Recebi mensagem de ${msg.from}, mas ainda estou carregando (Sync). Ignorando por segurança.`);
+            return;
+        }
+
+        // --- ÁREA DE DEBUG ---
         console.log(`📩 Debug: Mensagem de ${msg.from}: "${msg.body}"`);
 
-        // Evita responder status, grupos ou a si mesmo
-        if (!msg.from || msg.from.includes("status") || msg.from.includes("g.us") || msg.from === client.info.wid._serialized) {
-            return;
+        // Filtros de segurança
+        if (!msg.from) return;
+        if (msg.from.includes("status")) return;
+        if (msg.from.includes("g.us")) return;
+
+        // FIX: Verifica se client.info existe antes de comparar (evita crash na inicialização)
+        if (client.info && client.info.wid && msg.from === client.info.wid._serialized) {
+             console.log(`🔇 Ignorado: Mensagem enviada por mim mesmo.`);
+             return;
         }
         
         if (msg.type === 'sticker') return;
@@ -201,10 +215,14 @@ client.on("message", async (msg) => {
         if (['cancelar', 'sair', 'reset', 'inicio', 'encerrar'].includes(lowerText)) {
             userSessions.delete(contactId);
             await client.sendMessage(contactId, "🔄 Atendimento reiniciado. Envie um 'Oi' quando precisar.");
+            console.log(`🔄 Sessão resetada para ${contactId}`);
             return;
         }
 
-        if (session.step === 'COMPLETED') return;
+        if (session.step === 'COMPLETED') {
+            console.log(`🔇 Ignorado: Usuário ${contactId} já completou o atendimento.`);
+            return;
+        }
 
         const reply = async (text) => {
             await chat.sendStateTyping();
@@ -212,9 +230,10 @@ client.on("message", async (msg) => {
             await delay(typingTime); 
             await client.sendMessage(contactId, text);
             await chat.clearState();
+            console.log(`✅ Resposta enviada para ${contactId}: "${text.substring(0, 20)}..."`);
         };
 
-        // PASSO 1: INÍCIO (Corrigido para ser mais flexível)
+        // PASSO 1: INÍCIO
         if (session.step === 'IDLE') {
             const saudacoesRegex = /(oi|olá|ola|bom dia|boa tarde|boa noite|tarde|dia|noite|opa|tudo bem|bot|ajuda)/i;
             
@@ -223,6 +242,7 @@ client.on("message", async (msg) => {
                 return;
             }
 
+            console.log(`✅ Saudação detectada! Iniciando atendimento para ${contactId}`);
             session.step = 'WAITING_FOR_INFO';
             userSessions.set(contactId, session);
             
