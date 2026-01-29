@@ -1,5 +1,5 @@
 // =====================================
-// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO FINAL (RAILWAY 2GB + LÓGICA HUMANIZADA + FIX LOOP)
+// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO FINAL (FIX LOOP DE CRASH)
 // =====================================
 require('dotenv').config(); 
 const qrcode = require("qrcode-terminal");
@@ -8,6 +8,34 @@ const express = require("express");
 const qrcodeImage = require("qrcode");
 const fs = require('fs');
 const path = require('path');
+
+// =====================================
+// PROTEÇÃO CONTRA CRASH
+// =====================================
+process.on('uncaughtException', (err) => {
+    console.error('❌ ERRO NÃO TRATADO (CRASH EVITADO):', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ PROMISE REJEITADA:', reason);
+});
+
+// =====================================
+// LIMPEZA DE EMERGÊNCIA (SOLUÇÃO DO LOOP)
+// =====================================
+// Define o caminho da sessão
+const SESSION_PATH = path.join(__dirname, '.wwebjs_auth');
+
+// SE O BOT ESTIVER EM LOOP, ISSO VAI LIMPAR TUDO E COMEÇAR DO ZERO
+if (fs.existsSync(SESSION_PATH)) {
+    console.log("🔥 [MODO DE EMERGÊNCIA] Apagando sessão corrompida para destravar o bot...");
+    try {
+        fs.rmSync(SESSION_PATH, { recursive: true, force: true });
+        console.log("✅ Sessão limpa com sucesso. Um novo QR Code será gerado em breve.");
+    } catch (e) {
+        console.error("⚠️ Erro ao limpar sessão: " + e.message);
+    }
+}
 
 // =====================================
 // CONFIGURAÇÕES
@@ -21,19 +49,6 @@ const SESSION_TIMEOUT_MS = 60 * 60 * 1000; // 1 hora de sessão
 
 // Marca o horário de início para ignorar mensagens antigas
 const BOT_START_TIMESTAMP = Math.floor(Date.now() / 1000);
-
-// --- LIMPEZA DE EMERGÊNCIA (CRUCIAL PARA SAIR DO LOOP) ---
-// Se o bot estiver crashando ao iniciar, isso limpa a sessão corrompida.
-const SESSION_PATH = "/app/.wwebjs_auth";
-if (fs.existsSync(SESSION_PATH)) {
-    console.log("🧹 [FIX AUTO] Apagando sessão antiga/corrompida para iniciar conexão limpa...");
-    try {
-        fs.rmSync(SESSION_PATH, { recursive: true, force: true });
-        console.log("✅ Sessão limpa. Um novo QR Code será gerado.");
-    } catch (e) {
-        console.log("⚠️ Não foi possível limpar a sessão: " + e.message);
-    }
-}
 
 // =====================================
 // DEPARTAMENTOS
@@ -115,23 +130,22 @@ const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
 const client = new Client({
     authStrategy: new LocalAuth({ 
         clientId: "valeria_bot",
-        // Caminho explícito para garantir persistência no Docker/Railway
         dataPath: SESSION_PATH
     }),
-    // Configurações para estabilidade em nuvem
-    authTimeoutMs: 120000, 
+    // Timeout longo para garantir carregamento em contas pesadas
+    authTimeoutMs: 180000, 
     puppeteer: {
         headless: true, // Obrigatório na Railway
         executablePath: executablePath,
         args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage", // Crítico para memória
+            "--disable-dev-shm-usage", // Crítico: usa disco em vez de RAM para temp
             "--disable-accelerated-2d-canvas",
             "--no-first-run",
             "--no-zygote",
-            "--single-process", 
-            "--disable-gpu"
+            "--disable-gpu",
+            "--disable-extensions"
         ],
     },
 });
@@ -149,6 +163,11 @@ client.on('authenticated', () => {
 
 client.on('auth_failure', msg => {
     log(`❌ Falha na autenticação: ${msg}`);
+    // Se falhar a autenticação, limpa tudo para reiniciar limpo
+    try {
+        fs.rmSync(SESSION_PATH, { recursive: true, force: true });
+        process.exit(1); 
+    } catch (e) {}
 });
 
 client.on("qr", (qr) => {
@@ -170,33 +189,38 @@ client.on("disconnected", async (reason) => {
     log(`⚠️ Cliente desconectado! Motivo: ${reason}`);
     isConnected = false;
     isReady = false;
-    // Tenta reconectar
+    
+    // Tenta limpar e reconectar
+    try { await client.destroy(); } catch(e) {}
+    
     setTimeout(() => {
         client.initialize().catch(e => log(e.message));
     }, 5000);
 });
 
 // =====================================
-// LÓGICA DE MENSAGENS (FLUXO HUMANIZADO)
+// LÓGICA DE MENSAGENS
 // =====================================
 client.on("message", async (msg) => {
     try {
-        // Filtros Iniciais
-        if (!isReady) return; // Se ainda estiver carregando
-        if (msg.timestamp < BOT_START_TIMESTAMP) return; // Se for mensagem velha
+        // --- DEBUG VITAL ---
+        // Mostra no log TUDO que chega para sabermos se o bot ouve
+        // console.log(`📩 [DEBUG] Msg de ${msg.from}: ${msg.body.substring(0, 50)}`);
+
+        if (!isReady) return; 
+        if (msg.timestamp < BOT_START_TIMESTAMP) return;
         
         if (!msg.from || msg.from.includes("status") || msg.from.includes("g.us")) return;
         if (msg.type === 'sticker') return;
         if (client.info && client.info.wid && msg.from === client.info.wid._serialized) return;
 
-        console.log(`📩 Debug: Mensagem de ${msg.from}: "${msg.body}"`);
+        console.log(`📩 Processando mensagem de ${msg.from}`);
 
         const chat = await msg.getChat();
         const texto = msg.body.trim();
         const contactId = msg.from;
         const lowerText = texto.toLowerCase();
 
-        // Recupera sessão do usuário
         let session = userSessions.get(contactId) || { step: 'IDLE', lastInteraction: Date.now() };
         session.lastInteraction = Date.now();
         userSessions.set(contactId, session);
@@ -234,13 +258,12 @@ client.on("message", async (msg) => {
             return;
         }
 
-        // PASSO 2: RECEBE NOME -> TRATA NOME -> MOSTRA MENU
+        // PASSO 2: RECEBE NOME -> MOSTRA MENU
         if (session.step === 'WAITING_FOR_INFO') {
             const infoCliente = texto;
             const primeiroPalavra = infoCliente.split(/[\s,]+/)[0];
             let nomeFormatado = primeiroPalavra.charAt(0).toUpperCase() + primeiroPalavra.slice(1).toLowerCase();
 
-            // Lista inteligente para não chamar o cliente de "Oi" ou "Boa"
             const palavrasIgnoradas = [
                 'oi', 'olá', 'ola', 'bom', 'boa', 'gostaria', 'queria', 'preciso', 'estou', 
                 'sou', 'meu', 'não', 'nao', 'quero', 'assunto', 'sobre', 'tenho', 'necessito', 'favor'
@@ -249,7 +272,6 @@ client.on("message", async (msg) => {
             let saudacaoPersonalizada = "";
             let nomeParaSalvar = "Cliente"; 
 
-            // Se o nome não for uma palavra genérica, usamos ele
             if (!palavrasIgnoradas.includes(nomeFormatado.toLowerCase()) && nomeFormatado.length > 2) {
                 saudacaoPersonalizada = `, *${nomeFormatado}*`;
                 nomeParaSalvar = nomeFormatado;
@@ -272,7 +294,7 @@ client.on("message", async (msg) => {
             return;
         }
 
-        // PASSO 3: SELEÇÃO -> VALIDAÇÃO HUMANIZADA -> PEDE MOTIVO
+        // PASSO 3: SELEÇÃO -> PEDE MOTIVO
         if (session.step === 'WAITING_FOR_SELECTION') {
             const numeroOpcao = texto.replace(/\D/g, ''); 
             const opcao = parseInt(numeroOpcao);
@@ -283,7 +305,6 @@ client.on("message", async (msg) => {
             } else if (DEPARTMENTS[opcao]) {
                 dept = DEPARTMENTS[opcao];
             } else {
-                // Mensagem de erro mais educada
                 await reply("Me desculpe, não entendi. Poderia por gentileza escolher o número da opção desejada?");
                 return;
             }
@@ -293,7 +314,6 @@ client.on("message", async (msg) => {
             userSessions.set(contactId, session);
 
             const nome = session.clientName || "Cliente";
-            // Pergunta humanizada
             await reply(`${nome}, se você pudesse resumir em poucas palavras a escolha desse assunto, qual seria?`);
             return;
         }
@@ -303,7 +323,6 @@ client.on("message", async (msg) => {
             const motivo = texto; 
             const dept = session.selectedDept;
 
-            // Mensagem final citando "Doutores"
             let msgFinal = `Perfeito! Já estamos te transferindo para um de nossos Doutores do *${dept.name}*.\n\n` +
                            `Aguarde um momento, por favor.`;
 
@@ -313,7 +332,6 @@ client.on("message", async (msg) => {
 
             await reply(msgFinal);
 
-            // Monta relatório para o advogado
             const linkWhats = `https://wa.me/${contactId.replace('@c.us', '')}`;
             const infoCompleta = `Info Inicial: ${session.clientInfo}\n📝 *Resumo do Cliente:* ${motivo}`;
 
@@ -326,7 +344,6 @@ client.on("message", async (msg) => {
 
             log(`Encaminhando lead para: ${dept.responsavel_nome}`);
 
-            // Envia para o advogado responsável
             if (dept.responsavel_id) {
                 setTimeout(async () => {
                     try {
@@ -337,7 +354,6 @@ client.on("message", async (msg) => {
                 }, 2000);
             }
 
-            // Webhook
             enviarDadosParaAPI({
                 telefone: contactId.replace('@c.us', ''),
                 nome: session.clientName,
