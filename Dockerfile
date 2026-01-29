@@ -1,32 +1,29 @@
-# Usa a imagem oficial do Puppeteer (já vem com Chrome e Node prontos)
-FROM ghcr.io/puppeteer/puppeteer:latest
+# Começamos com um Linux leve e limpo com Node.js 18
+FROM node:18-slim
 
-# Define que vamos mexer nos arquivos como administrador (root)
-USER root
-WORKDIR /app
+# 1. Instala o Google Chrome Stable Oficial e as fontes necessárias
+# (Isso garante que o arquivo /usr/bin/google-chrome-stable vai existir)
+RUN apt-get update && apt-get install -y wget gnupg ca-certificates procps libxss1 \
+    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
+    && sh -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list' \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable fonts-ipafont-gothic fonts-wqy-zenhei fonts-thai-tlwg fonts-kacst fonts-freefont-ttf \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copia os arquivos de configuração
-COPY package*.json ./
-
-# Instala as dependências do seu robô
-# A flag --ignore-scripts impede que o puppeteer tente baixar o Chrome de novo (já temos na imagem)
-RUN npm install --ignore-scripts
-
-# Copia o resto do código
-COPY . .
-
-# Importante: Dá permissão para o usuário do sistema escrever na pasta
-# (Isso é crucial para salvar o arquivo de sessão do WhatsApp .wwebjs_auth)
-RUN chown -R pptruser:pptruser /app
-
-# === CORREÇÃO ESSENCIAL ===
-# Recolocamos essas variáveis. Elas são obrigatórias para o seu chatbot.js
-# saber onde está o Chrome no Linux e não travar tentando baixar outro.
+# 2. Dizemos para o código: "O Chrome está AQUI, use este e não baixe outro"
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 
-# Volta para o usuário padrão de segurança do Puppeteer
-USER pptruser
+# Configura a pasta de trabalho
+WORKDIR /app
 
-# Inicia o robô com o nome CORRETO do seu arquivo
+# Copia e instala o projeto
+COPY package*.json ./
+RUN npm install
+
+# Copia o código do robô
+COPY . .
+
+# Inicia o robô (usando o nome certo do arquivo)
 CMD ["node", "chatbot.js"]
