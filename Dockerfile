@@ -19,9 +19,11 @@ COPY . .
 # (Isso é crucial para salvar o arquivo de sessão do WhatsApp .wwebjs_auth)
 RUN chown -R pptruser:pptruser /app
 
-# === CORREÇÃO ===
-# Removemos a linha ENV PUPPETEER_EXECUTABLE_PATH manual.
-# A imagem oficial já configura isso automaticamente para o caminho certo.
+# === CORREÇÃO ESSENCIAL ===
+# Recolocamos essas variáveis. Elas são obrigatórias para o seu chatbot.js
+# saber onde está o Chrome no Linux e não travar tentando baixar outro.
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 
 # Volta para o usuário padrão de segurança do Puppeteer
 USER pptruser
