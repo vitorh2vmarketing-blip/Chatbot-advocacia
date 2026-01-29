@@ -33,12 +33,14 @@ try {
     // Se existir, apagamos para forçar uma conexão limpa (Factory Reset)
     // Isso é necessário porque seu bot entrou em loop de autenticação
     if (fs.existsSync(SESSION_PATH)) {
-        console.log("🔥 Sessão encontrada. Apagando para corrigir o loop...");
-        fs.rmSync(SESSION_PATH, { recursive: true, force: true });
-        console.log("✅ Sessão apagada. Um NOVO QR Code será gerado.");
+        // Verifica se a pasta está vazia ou corrompida se necessário, 
+        // mas aqui vamos confiar no fluxo de desconexão para limpar.
+        // Se o bot estiver em loop de crash na inicialização, descomente a linha abaixo:
+        // fs.rmSync(SESSION_PATH, { recursive: true, force: true });
+        console.log("ℹ️ Sessão anterior encontrada. Tentando restaurar...");
     }
 } catch (e) {
-    console.error("⚠️ Erro ao limpar sessão:", e.message);
+    console.error("⚠️ Erro ao verificar sessão:", e.message);
 }
 
 // =====================================
@@ -124,7 +126,12 @@ client.on('authenticated', () => {
 
 client.on('auth_failure', msg => {
     console.error(`❌ Falha na autenticação: ${msg}`);
-    process.exit(1); // Reinicia para tentar de novo
+    // Se falhar a autenticação, apaga a sessão para garantir QR novo
+    try {
+        console.log("🧹 Apagando sessão inválida...");
+        fs.rmSync(SESSION_PATH, { recursive: true, force: true });
+    } catch(e) {}
+    process.exit(1); 
 });
 
 client.on("qr", (qr) => {
@@ -146,8 +153,20 @@ client.on("disconnected", async (reason) => {
     console.log(`⚠️ Desconectado: ${reason}`);
     isConnected = false;
     isReady = false;
-    try { await client.destroy(); } catch(e) {}
-    process.exit(1); // Reinicia o container para limpar memória RAM
+    
+    // --- CORREÇÃO DO LOOP DE MENSAGENS ---
+    // Se desconectou, APAGA a sessão imediatamente. 
+    // Assim, quando o Railway reiniciar, ele não acha sessão velha e pede QR Code novo.
+    console.log("🧹 Limpando sessão inválida para evitar loop...");
+    try {
+        await client.destroy();
+        fs.rmSync(SESSION_PATH, { recursive: true, force: true });
+        console.log("✅ Sessão removida. Reiniciando para novo QR Code.");
+    } catch(e) {
+        console.error("⚠️ Erro ao limpar sessão na desconexão:", e.message);
+    }
+    
+    process.exit(1); // Reinicia o container
 });
 
 // =====================================
