@@ -1,5 +1,4 @@
 # Usa a imagem oficial do Puppeteer (já vem com Chrome e Node prontos)
-# Essa é a estratégia mais segura para evitar erros de "Build" no Railway
 FROM ghcr.io/puppeteer/puppeteer:latest
 
 # Define que vamos mexer nos arquivos como administrador (root)
@@ -20,12 +19,12 @@ COPY . .
 # (Isso é crucial para salvar o arquivo de sessão do WhatsApp .wwebjs_auth)
 RUN chown -R pptruser:pptruser /app
 
-# Define a variável de ambiente para garantir que o robô ache o Chrome da imagem
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+# === CORREÇÃO ===
+# Removemos a linha ENV PUPPETEER_EXECUTABLE_PATH manual.
+# A imagem oficial já configura isso automaticamente para o caminho certo.
 
 # Volta para o usuário padrão de segurança do Puppeteer
 USER pptruser
 
-# Inicia o robô
+# Inicia o robô com o nome CORRETO do seu arquivo
 CMD ["node", "chatbot.js"]
-
