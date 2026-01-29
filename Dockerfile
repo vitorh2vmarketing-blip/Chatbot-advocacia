@@ -27,4 +27,5 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 USER pptruser
 
 # Inicia o robô
-CMD ["node", "index.js"]
+CMD ["node", "chatbot.js"]
+
