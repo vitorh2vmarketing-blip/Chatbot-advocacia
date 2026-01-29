@@ -1,4 +1,5 @@
-FROM node:18FROM node:18# Usa a imagem oficial do Puppeteer (já vem com Chrome e Node prontos)
+# Usa a imagem oficial do Puppeteer (já vem com Chrome e Node prontos)
+# Essa é a estratégia mais segura para evitar erros de "Build" no Railway
 FROM ghcr.io/puppeteer/puppeteer:latest
 
 # Define que vamos mexer nos arquivos como administrador (root)
