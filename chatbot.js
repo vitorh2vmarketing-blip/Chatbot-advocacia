@@ -1,5 +1,5 @@
 // =====================================
-// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO FINAL (RAILWAY 2GB + LÓGICA HUMANIZADA)
+// BOT VALÉRIA DARÉ ADVOCACIA - VERSÃO FINAL (RAILWAY 2GB + LÓGICA HUMANIZADA + FIX LOOP)
 // =====================================
 require('dotenv').config(); 
 const qrcode = require("qrcode-terminal");
@@ -21,6 +21,19 @@ const SESSION_TIMEOUT_MS = 60 * 60 * 1000; // 1 hora de sessão
 
 // Marca o horário de início para ignorar mensagens antigas
 const BOT_START_TIMESTAMP = Math.floor(Date.now() / 1000);
+
+// --- LIMPEZA DE EMERGÊNCIA (CRUCIAL PARA SAIR DO LOOP) ---
+// Se o bot estiver crashando ao iniciar, isso limpa a sessão corrompida.
+const SESSION_PATH = "/app/.wwebjs_auth";
+if (fs.existsSync(SESSION_PATH)) {
+    console.log("🧹 [FIX AUTO] Apagando sessão antiga/corrompida para iniciar conexão limpa...");
+    try {
+        fs.rmSync(SESSION_PATH, { recursive: true, force: true });
+        console.log("✅ Sessão limpa. Um novo QR Code será gerado.");
+    } catch (e) {
+        console.log("⚠️ Não foi possível limpar a sessão: " + e.message);
+    }
+}
 
 // =====================================
 // DEPARTAMENTOS
@@ -103,7 +116,7 @@ const client = new Client({
     authStrategy: new LocalAuth({ 
         clientId: "valeria_bot",
         // Caminho explícito para garantir persistência no Docker/Railway
-        dataPath: "/app/.wwebjs_auth"
+        dataPath: SESSION_PATH
     }),
     // Configurações para estabilidade em nuvem
     authTimeoutMs: 120000, 
