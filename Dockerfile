@@ -56,4 +56,5 @@ RUN npm install
 COPY . .
 
 # Comando para iniciar o bot
-CMD ["node", "bot.js"]
+CMD ["node", "chatbot.js"]
+
