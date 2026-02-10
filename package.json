@@ -2,9 +2,9 @@
   "name": "bot-valeria-dare",
   "version": "1.0.0",
   "description": "Bot de atendimento jurídico com persistência e agenda",
-  "main": "bot.js",
+  "main": "chatbot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node chatbot.js"
   },
   "engines": {
     "node": ">=18.0.0"
