@@ -1,5 +1,5 @@
 // ============================================================
-// BOT VALÉRIA DARÉ - VERSÃO FINAL (ENTREGA)
+// BOT VALÉRIA DARÉ - VERSÃO FINAL (ENTREGA RAILWAY/CLOUD)
 // ============================================================
 // Recursos:
 // - Memória de Clientes (Reconhece quem volta)
@@ -7,6 +7,7 @@
 // - Proteção Anti-Crash (Não cai com erros de rede)
 // - Alerta Interno (Bolinha verde + Aviso no "Eu")
 // - Filtro Anti-Spam (Ignora mensagens apagadas/sistema)
+// - Configurado para Docker/Railway (Headless True)
 // ============================================================
 
 require('dotenv').config();
@@ -36,10 +37,23 @@ const WORK_HOUR_START = 9;
 const WORK_HOUR_END = 18;
 const GOOGLE_AGENDA_LINK = "https://calendar.app.google/HCshHssc9GugZBaCA"; 
 
-// Arquivo de banco de dados simples
-const DB_FILE = path.join(__dirname, 'clientes_db.json');
+// --- CONFIGURAÇÃO DE PERSISTÊNCIA (RAILWAY) ---
+// Se houver um volume montado no Railway, usamos ele. Senão, usamos a pasta local.
+// No Railway, crie um Volume e monte em "/app/data" para salvar o login.
+const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH 
+    ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'data') 
+    : path.join(__dirname, 'data');
 
-// Garante que o arquivo de banco de dados existe
+// Garante que a pasta de dados existe
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+// Arquivos salvos dentro da pasta segura
+const DB_FILE = path.join(DATA_DIR, 'clientes_db.json');
+const AUTH_PATH = path.join(DATA_DIR, '.wwebjs_auth');
+
+// Cria o DB se não existir
 if (!fs.existsSync(DB_FILE)) {
     fs.writeFileSync(DB_FILE, JSON.stringify({}));
 }
@@ -47,7 +61,7 @@ if (!fs.existsSync(DB_FILE)) {
 const BOT_START_TIMESTAMP = Math.floor(Date.now() / 1000);
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 
-log(`🕒 Bot iniciado. Sistema pronto para entrega.`);
+log(`🕒 Bot iniciado. Diretório de dados: ${DATA_DIR}`);
 
 // =====================================
 // DEPARTAMENTOS
@@ -99,8 +113,11 @@ function salvarCliente(telefone, nome) {
 // =====================================
 function isBusinessHours() {
     const agora = new Date();
-    const diaSemana = agora.getDay(); 
-    const hora = agora.getHours();
+    // Ajuste de fuso horário para o Brasil (UTC-3) pois o servidor pode estar nos EUA
+    const horaBrasilia = new Date(agora.toLocaleString("en-US", {timeZone: "America/Sao_Paulo"}));
+    
+    const diaSemana = horaBrasilia.getDay(); 
+    const hora = horaBrasilia.getHours();
     return (diaSemana >= 1 && diaSemana <= 5) && (hora >= WORK_HOUR_START && hora < WORK_HOUR_END);
 }
 
@@ -115,17 +132,7 @@ setInterval(async () => {
         const tempoInativo = now - session.lastInteraction;
 
         if (tempoInativo > TEMPO_LIMITE) {
-            if (session.step !== 'IDLE' && session.step !== 'COMPLETED') {
-                try {
-                    const msgHumanizada = "Oi! 👋 Percebi que você ficou um tempinho em silêncio.\n\n" +
-                                          "Vou encerrar nosso atendimento por enquanto para organizar a agenda, tudo bem?\n\n" +
-                                          "Mas sem problemas! Quando quiser retomar, é só mandar um *Oi* que estarei por aqui. 😉";
-                    
-                    if (isConnected && typeof client !== 'undefined') {
-                        await client.sendMessage(key, msgHumanizada);
-                    }
-                } catch (e) {}
-            }
+            // Limpeza silenciosa para evitar spam em reinicios
             userSessions.delete(key);
         }
     }
@@ -153,15 +160,15 @@ const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const client = new Client({
     authStrategy: new LocalAuth({ 
         clientId: "valeria_bot",
-        dataPath: path.join(__dirname, '.wwebjs_auth') 
+        dataPath: AUTH_PATH // Usa o caminho persistente no Volume
     }),
-    webVersionCache: { type: 'none' }, // Essencial para evitar travamento de versão
+    webVersionCache: { type: 'none' }, 
     puppeteer: {
-        headless: false,
+        headless: true, // OBRIGATÓRIO SER TRUE NA NUVEM/RAILWAY
         args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
+            "--disable-dev-shm-usage", // Evita crash de memória no Docker
             "--disable-accelerated-2d-canvas",
             "--no-first-run",
             "--no-zygote",
@@ -176,7 +183,7 @@ const client = new Client({
 client.on('qr', (qr) => {
     currentQRCode = qr;
     isConnected = false;
-    log("📲 QR CODE GERADO! Escaneie agora.");
+    log("📲 QR CODE GERADO! Escaneie pelo site.");
     qrcode.generate(qr, { small: true });
 });
 
@@ -193,8 +200,7 @@ client.on('authenticated', () => {
 client.on('auth_failure', (msg) => {
     log(`❌ Falha na autenticação: ${msg}`);
     try {
-        const authPath = path.join(__dirname, '.wwebjs_auth');
-        if (fs.existsSync(authPath)) fs.rmSync(authPath, { recursive: true, force: true });
+        if (fs.existsSync(AUTH_PATH)) fs.rmSync(AUTH_PATH, { recursive: true, force: true });
     } catch (e) {}
 });
 
@@ -213,7 +219,6 @@ client.on('message', async (msg) => {
         const ehGrupo = deQuem.endsWith('@g.us');
         const ehStatus = msg.isStatus;
         
-        // Log para depuração
         log(`📩 Debug: Recebi msg de ${deQuem} [Tipo: ${tipoMsg}] -> "${msg.body}"`);
 
         // =======================================================
@@ -255,7 +260,7 @@ client.on('message', async (msg) => {
         let session = userSessions.get(contactId) || { step: 'IDLE', lastInteraction: Date.now() };
 
         // Regex de saudação (Com limite de palavra \b para evitar "Higor" = "Hi")
-        const saudacaoRegex = /^(oi+|ol[áa]+|opa+|eai|hello|hi|b[ou]m\s+dia|boa\s+tarde|boa\s+noite|tudo\s+bem|iniciar|começar|reset|sair|cancelar|encerrar|fim|doutora|dra|bom dia!|Bom dia!|Boa tarde!|Boa noite!|)\b/i;
+        const saudacaoRegex = /^(oi+|ol[áa]+|opa+|eai|hello|hi|b[ou]m\s+dia|boa\s+tarde|boa\s+noite|tudo\s+bem|iniciar|começar|reset|sair|cancelar|encerrar|fim|doutora|dra)\b/i;
         
         if (saudacaoRegex.test(lowerText)) {
             // Se estiver no menu de retorno (1 ou 2), não reseta imediatamente
@@ -405,7 +410,7 @@ client.on('message', async (msg) => {
         if (session.step === 'WAITING_FOR_SCHEDULING') {
             const dept = session.selectedDept;
             const motivo = session.motivo;
-            const dataHora = new Date().toLocaleString('pt-BR');
+            const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
             
             // Regex expandido para entender "humanês" (aceita "por favor", "pode ser", etc)
             const querAgendar = /^(sim|s|claro|com certeza|quero|aham|yes|pode ser|por favor|gostaria|agendar|ok|tá bom|beleza|topo|pode|pode sim|uhum|com certeza)/i.test(lowerText);
@@ -473,17 +478,17 @@ client.on('message', async (msg) => {
 });
 
 // =====================================
-// SERVIDOR
+// SERVIDOR WEB (PAINEL)
 // =====================================
 app.get('/', async (req, res) => {
-    if (isConnected) res.send('<h1 style="color:green">Bot Conectado! ✅</h1>');
+    if (isConnected) res.send('<h1 style="color:green; font-family:sans-serif">✅ Bot Valéria Daré Online!</h1>');
     else if (currentQRCode) {
         const url = await qrcodeImage.toDataURL(currentQRCode);
-        res.send(`<div style="text-align:center"><h1>Escaneie:</h1><img src="${url}" /></div>`);
-    } else res.send('<h1>Iniciando...</h1>');
+        res.send(`<div style="text-align:center; font-family:sans-serif"><h1>Escaneie para conectar</h1><img src="${url}" /><script>setTimeout(()=>location.reload(),5000)</script></div>`);
+    } else res.send('<h1>Iniciando sistema...</h1><script>setTimeout(()=>location.reload(),3000)</script>');
 });
 
-app.listen(PORT, () => log(`🌐 Painel rodando em http://localhost:${PORT}`));
+app.listen(PORT, () => log(`🌐 Painel rodando na porta ${PORT}`));
 
 const startBot = async () => {
     try {
@@ -495,4 +500,3 @@ const startBot = async () => {
 };
 
 startBot();
-
