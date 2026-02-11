@@ -8,6 +8,16 @@
 // - Configurado para Railway (Headless True)
 // ============================================================
 
+// ------------------------------------------------------------
+// ⚠️ INSTRUÇÃO PARA NÃO DESCONECTAR NO RAILWAY ⚠️
+// ------------------------------------------------------------
+// 1. No painel do Railway, clique no seu projeto.
+// 2. Vá na aba "Volumes" (ou clique com botão direito no retângulo do serviço > Volume).
+// 3. Clique em "Create Volume" (Criar Volume).
+// 4. No campo "Mount Path" (Caminho de Montagem), escreva exatamente: /app/data
+// 5. Reinicie o bot (Redeploy).
+// ------------------------------------------------------------
+
 require('dotenv').config();
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
@@ -37,15 +47,23 @@ const WORK_HOUR_END = 18;
 const GOOGLE_AGENDA_LINK = "https://calendar.app.google/HCshHssc9GugZBaCA"; 
 
 // --- CONFIGURAÇÃO DE PERSISTÊNCIA (RAILWAY) ---
+// Define onde os dados serão salvos.
+// Se estiver no Railway com Volume, usa o caminho do volume. Se for local, usa a pasta 'data'.
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH 
-    ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'data') 
+    ? process.env.RAILWAY_VOLUME_MOUNT_PATH 
     : path.join(__dirname, 'data');
 
+// Garante que a pasta de dados existe
 if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+    try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+    } catch (e) {
+        console.error('Erro ao criar diretório de dados:', e);
+    }
 }
 
 const DB_FILE = path.join(DATA_DIR, 'clientes_db.json');
+// A pasta .wwebjs_auth deve ficar DENTRO do volume para não ser apagada
 const AUTH_PATH = path.join(DATA_DIR, '.wwebjs_auth');
 
 if (!fs.existsSync(DB_FILE)) {
@@ -55,7 +73,7 @@ if (!fs.existsSync(DB_FILE)) {
 const BOT_START_TIMESTAMP = Math.floor(Date.now() / 1000);
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 
-log(`🕒 Bot iniciado. Diretório de dados: ${DATA_DIR}`);
+log(`🕒 Bot iniciado. Salvando sessão em: ${AUTH_PATH}`);
 
 // =====================================
 // DEPARTAMENTOS
@@ -204,9 +222,11 @@ client.on('authenticated', () => {
 
 client.on('auth_failure', (msg) => {
     log(`❌ Falha na autenticação: ${msg}`);
-    try {
-        if (fs.existsSync(AUTH_PATH)) fs.rmSync(AUTH_PATH, { recursive: true, force: true });
-    } catch (e) {}
+    // ATENÇÃO: Removi a exclusão automática da pasta para evitar perda de sessão
+    // se o erro for apenas temporário durante a atualização.
+    // try {
+    //    if (fs.existsSync(AUTH_PATH)) fs.rmSync(AUTH_PATH, { recursive: true, force: true });
+    // } catch (e) {}
 });
 
 client.on('disconnected', (reason) => {
@@ -299,7 +319,7 @@ client.on('message', async (msg) => {
                 
                 await reply(`Entendido, ${session.clientName}. Vou avisar nossa equipe que você deseja continuar o atendimento.`);
                 
-                session.motivo = "Cliente retornante: Continuidade de atendimento";
+                session.motivo = "Retorno de Cliente: Continuidade de atendimento";
                 session.step = 'WAITING_FOR_SCHEDULING'; 
                 
                 // Dispara alerta interno
@@ -307,7 +327,7 @@ client.on('message', async (msg) => {
                     await chat.markUnread();
                     const meuNumero = client.info.wid.user + '@c.us'; 
                     const linkZap = `https://wa.me/${contactId.replace('@c.us', '')}`;
-                    const alerta = `🚨 *RETORNO CLIENTE* 🚨\n👤 ${session.clientName}\n🔗 ${linkZap}`;
+                    const alerta = `🚨 *CLIENTE RETORNANTE* 🚨\n👤 ${session.clientName}\n🔗 ${linkZap}`;
                     await client.sendMessage(meuNumero, alerta);
                 } catch(e) {}
 
@@ -335,7 +355,8 @@ client.on('message', async (msg) => {
         if (session.step === 'WAITING_FOR_INFO') {
             const nome = texto.split(" ")[0];
             if (texto.length < 3) {
-                await reply("Nome muito curto. Por favor, digite seu nome completo.");
+                await reply("Nome muito curto");
+                await reply("Por favor, digite seu nome completo.");
                 return;
             }
 
@@ -360,7 +381,8 @@ client.on('message', async (msg) => {
             if (DEPARTMENTS[opcao]) {
                 dept = DEPARTMENTS[opcao];
             } else {
-                await reply("Desculpe, não entendi.\nPoderia por gentileza, digitar o *NÚMERO* da opção desejada?");
+                await reply("Desculpe, não entendi");
+                await reply("Poderia por gentileza, digitar apenas o *NÚMERO* da opção desejada?");
                 return;
             }
 
@@ -371,17 +393,20 @@ client.on('message', async (msg) => {
             return;
         }
 
+        // 4. Recebe Motivo -> Pergunta Agendamento (Com Menu 1 e 2)
         if (session.step === 'WAITING_FOR_REASON') {
             session.motivo = texto;
             session.step = 'WAITING_FOR_SCHEDULING';
             userSessions.set(contactId, session);
             
+            // Mensagens divididas para melhor fluxo de leitura
             await reply("Perfeito.");
             await reply("Para agilizarmos o seu atendimento, gostaria de deixar uma reunião agendada com a nossa equipe?");
             await reply("Por gentileza, digite o NÚMERO da opção desejada:\n\n1 - Sim, por favor!\n2 - Quero falar com o atendente.");
             return;
         }
 
+        // 5. Agendamento -> Fim
         if (session.step === 'WAITING_FOR_SCHEDULING') {
             const dept = session.selectedDept;
             const motivo = session.motivo;
@@ -419,8 +444,8 @@ client.on('message', async (msg) => {
                                       `👤 *Cliente:* ${session.clientName}\n` +
                                       `📂 *Dept:* ${dept.name}\n` +
                                       `📝 *Resumo:* ${motivo}\n` +
-                                      `📅 *Agendou?* ${opcao === '1' ? 'SIM' : 'NÃO'}\n` +
-                                      `🔗 *Link:* ${linkZap}`;
+                                      `📅 *Agendou?* ${opcao === '1' ? 'SIM (Link enviado)' : 'NÃO (Transferido)'}\n` +
+                                      `🔗 *Clique para atender:* ${linkZap}`;
                 
                 await client.sendMessage(meuNumero, alertaInterno);
             } catch (e) {
