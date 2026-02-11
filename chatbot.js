@@ -1,13 +1,11 @@
 // ============================================================
-// BOT VALÉRIA DARÉ - VERSÃO FINAL (ENTREGA RAILWAY/CLOUD)
+// BOT VALÉRIA DARÉ - VERSÃO FINAL (ENTREGA 1.0)
 // ============================================================
 // Recursos:
-// - Memória de Clientes (Reconhece quem volta)
-// - Agendamento Google Calendar
-// - Proteção Anti-Crash (Não cai com erros de rede)
-// - Alerta Interno (Bolinha verde + Aviso no "Eu")
-// - Filtro Anti-Spam (Ignora mensagens apagadas/sistema)
-// - Configurado para Docker/Railway (Headless True)
+// - Textos revisados conforme roteiro (chatbot.docx)
+// - Menu numérico final para agendamento
+// - Proteção Anti-Crash e Persistência de Dados
+// - Configurado para Railway (Headless True)
 // ============================================================
 
 require('dotenv').config();
@@ -32,28 +30,24 @@ process.on('uncaughtException', (err) => {
 // CONFIGURAÇÕES
 // =====================================
 const PORT = process.env.PORT || 3000;
+// ATENÇÃO: Webhook de teste. Para produção, troque se necessário.
 const API_URL = "https://webhook.site/cc903f72-48a6-47a1-bb06-c89f5c6eefe2";
 const WORK_HOUR_START = 9;
 const WORK_HOUR_END = 18;
 const GOOGLE_AGENDA_LINK = "https://calendar.app.google/HCshHssc9GugZBaCA"; 
 
 // --- CONFIGURAÇÃO DE PERSISTÊNCIA (RAILWAY) ---
-// Se houver um volume montado no Railway, usamos ele. Senão, usamos a pasta local.
-// No Railway, crie um Volume e monte em "/app/data" para salvar o login.
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH 
     ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'data') 
     : path.join(__dirname, 'data');
 
-// Garante que a pasta de dados existe
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Arquivos salvos dentro da pasta segura
 const DB_FILE = path.join(DATA_DIR, 'clientes_db.json');
 const AUTH_PATH = path.join(DATA_DIR, '.wwebjs_auth');
 
-// Cria o DB se não existir
 if (!fs.existsSync(DB_FILE)) {
     fs.writeFileSync(DB_FILE, JSON.stringify({}));
 }
@@ -72,7 +66,7 @@ const ATENDENTE_GERAL = { nome: "Valkiria Dragone", id: "35999672058@c.us" };
 const DEPARTMENTS = {
     1: { name: "BPC / LOAS para Autistas", responsavel_nome: ADVOGADA_RESPONSAVEL.nome, responsavel_id: ADVOGADA_RESPONSAVEL.id },
     2: { name: "Direitos da Pessoa com Fibromialgia", responsavel_nome: ADVOGADA_RESPONSAVEL.nome, responsavel_id: ADVOGADA_RESPONSAVEL.id },
-    3: { name: "Auxílio Acidente (Acidente do Trabalho)", responsavel_nome: ADVOGADA_RESPONSAVEL.nome, responsavel_id: ADVOGADA_RESPONSAVEL.id },
+    3: { name: "Auxílio Acidente - Acidente de qualquer natureza", responsavel_nome: ADVOGADA_RESPONSAVEL.nome, responsavel_id: ADVOGADA_RESPONSAVEL.id },
     4: { name: "Trabalhista - Acidente do Trabalho", responsavel_nome: ADVOGADA_RESPONSAVEL.nome, responsavel_id: ADVOGADA_RESPONSAVEL.id },
     5: { name: "Outros", responsavel_nome: ATENDENTE_GERAL.nome, responsavel_id: ATENDENTE_GERAL.id }
 };
@@ -113,9 +107,8 @@ function salvarCliente(telefone, nome) {
 // =====================================
 function isBusinessHours() {
     const agora = new Date();
-    // Ajuste de fuso horário para o Brasil (UTC-3) pois o servidor pode estar nos EUA
+    // Ajuste UTC-3 (Brasil)
     const horaBrasilia = new Date(agora.toLocaleString("en-US", {timeZone: "America/Sao_Paulo"}));
-    
     const diaSemana = horaBrasilia.getDay(); 
     const hora = horaBrasilia.getHours();
     return (diaSemana >= 1 && diaSemana <= 5) && (hora >= WORK_HOUR_START && hora < WORK_HOUR_END);
@@ -126,13 +119,25 @@ function isBusinessHours() {
 // =====================================
 setInterval(async () => {
     const now = Date.now();
-    const TEMPO_LIMITE = 30 * 60 * 1000; // 30 minutos
+    const TEMPO_AVISO = 15 * 60 * 1000;  // 15 min
+    const TEMPO_LIMITE = 30 * 60 * 1000; // 30 min
 
     for (const [key, session] of userSessions.entries()) {
         const tempoInativo = now - session.lastInteraction;
 
+        // Aviso de 15 minutos
+        if (tempoInativo > TEMPO_AVISO && !session.avisoInatividadeEnviado) {
+            if (session.step !== 'IDLE' && session.step !== 'COMPLETED') {
+                try {
+                    await client.sendMessage(key, "Importante: Caso não haja retorno em até 30 minutos, a conversa será reiniciada.");
+                    session.avisoInatividadeEnviado = true;
+                    userSessions.set(key, session);
+                } catch (e) {}
+            }
+        }
+
+        // Reset de 30 minutos
         if (tempoInativo > TEMPO_LIMITE) {
-            // Limpeza silenciosa para evitar spam em reinicios
             userSessions.delete(key);
         }
     }
@@ -160,15 +165,15 @@ const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 const client = new Client({
     authStrategy: new LocalAuth({ 
         clientId: "valeria_bot",
-        dataPath: AUTH_PATH // Usa o caminho persistente no Volume
+        dataPath: AUTH_PATH 
     }),
     webVersionCache: { type: 'none' }, 
     puppeteer: {
-        headless: true, // OBRIGATÓRIO SER TRUE NA NUVEM/RAILWAY
+        headless: true, // OBRIGATÓRIO PARA NUVEM
         args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage", // Evita crash de memória no Docker
+            "--disable-dev-shm-usage", 
             "--disable-accelerated-2d-canvas",
             "--no-first-run",
             "--no-zygote",
@@ -183,7 +188,7 @@ const client = new Client({
 client.on('qr', (qr) => {
     currentQRCode = qr;
     isConnected = false;
-    log("📲 QR CODE GERADO! Escaneie pelo site.");
+    log("📲 QR CODE GERADO! Acesse o painel web para escanear.");
     qrcode.generate(qr, { small: true });
 });
 
@@ -210,7 +215,7 @@ client.on('disconnected', (reason) => {
 });
 
 // =====================================
-// LÓGICA DE MENSAGENS (COM RECONHECIMENTO)
+// LÓGICA DE MENSAGENS
 // =====================================
 client.on('message', async (msg) => {
     try {
@@ -219,57 +224,35 @@ client.on('message', async (msg) => {
         const ehGrupo = deQuem.endsWith('@g.us');
         const ehStatus = msg.isStatus;
         
-        log(`📩 Debug: Recebi msg de ${deQuem} [Tipo: ${tipoMsg}] -> "${msg.body}"`);
+        log(`📩 Debug: Recebi msg de ${deQuem} -> "${msg.body}"`);
 
-        // =======================================================
-        // FILTROS DE SEGURANÇA (EVITAR SPAM AO DELETAR MSG)
-        // =======================================================
+        // FILTROS DE SEGURANÇA
         if (msg.timestamp < BOT_START_TIMESTAMP) return;
         if (!deQuem || ehGrupo || ehStatus) return;
         if (deQuem === client.info?.wid?._serialized) return;
 
-        // Lista negra de tipos de mensagens técnicas que NÃO devem gerar resposta
-        const tiposIgnorados = [
-            'e2e_notification', // Aviso de segurança
-            'notification_template', // Avisos de sistema
-            'call_log', // Registro de chamada
-            'protocol', // Atualização de protocolo
-            'ciphertext', // Mensagem ilegível
-            'revoked', // Mensagem apagada
-            'gp2', // Convite de grupo
-            'sticker' // Figurinhas (Opcional, mas bom manter)
-        ];
-
-        if (tiposIgnorados.includes(tipoMsg)) {
-            console.log(`🚫 Ignorado: Mensagem de sistema (${tipoMsg})`);
-            return;
-        }
-
-        // Ignora mensagens vazias (comuns quando se apaga msg ou envia mídia sem legenda)
-        if (!msg.body || msg.body.trim().length === 0) {
-            console.log("🚫 Ignorado: Corpo da mensagem vazio.");
-            return;
-        }
+        const tiposIgnorados = ['e2e_notification', 'notification_template', 'call_log', 'protocol', 'ciphertext', 'revoked', 'gp2', 'sticker'];
+        if (tiposIgnorados.includes(tipoMsg)) return;
+        if (!msg.body || msg.body.trim().length === 0) return;
 
         const chat = await msg.getChat();
         const contactId = msg.from;
         const texto = msg.body.trim();
         const lowerText = texto.toLowerCase();
 
-        // Recupera sessão ativa
         let session = userSessions.get(contactId) || { step: 'IDLE', lastInteraction: Date.now() };
 
-        // Regex de saudação (Com limite de palavra \b para evitar "Higor" = "Hi")
+        // Reseta aviso se usuário interagiu
+        session.lastInteraction = Date.now();
+        session.avisoInatividadeEnviado = false; 
+
         const saudacaoRegex = /^(oi+|ol[áa]+|opa+|eai|hello|hi|b[ou]m\s+dia|boa\s+tarde|boa\s+noite|tudo\s+bem|iniciar|começar|reset|sair|cancelar|encerrar|fim|doutora|dra)\b/i;
         
         if (saudacaoRegex.test(lowerText)) {
-            // Se estiver no menu de retorno (1 ou 2), não reseta imediatamente
             if (session.step !== 'IDLE' && session.step !== 'RETURNING_USER') {
                 session = { step: 'IDLE', lastInteraction: Date.now() };
                 userSessions.set(contactId, session);
             }
-        } else {
-            session.lastInteraction = Date.now();
         }
         userSessions.set(contactId, session);
 
@@ -283,11 +266,10 @@ client.on('message', async (msg) => {
 
         // --- FLUXO INTELIGENTE ---
 
-        // 1. Início (Verifica se cliente já existe)
         if (session.step === 'IDLE') {
             const clienteSalvo = getClienteSalvo(contactId.replace('@c.us', ''));
             
-            // CASO 1: CLIENTE JÁ CONHECIDO (RETORNO)
+            // CLIENTE RETORNANTE
             if (clienteSalvo && clienteSalvo.nome) {
                 log(`👤 Cliente reconhecido: ${clienteSalvo.nome}`);
                 session.clientName = clienteSalvo.nome;
@@ -295,48 +277,47 @@ client.on('message', async (msg) => {
                 session.step = 'RETURNING_USER'; 
                 userSessions.set(contactId, session);
 
-                await reply(`Olá novamente, *${clienteSalvo.nome}*! 👋\nQue bom ter você de volta.\n\nComo posso ajudar hoje?\n\n1️⃣ - Falar sobre o caso anterior (Falar com atendente)\n2️⃣ - Iniciar um novo atendimento (Ver Menu)`);
+                await reply(`Olá, *${clienteSalvo.nome}*! 👋\nQue bom ter você de volta.\n\nComo posso ajudar hoje?\n\n1️⃣ - Falar sobre o caso anterior\n2️⃣ - Iniciar um novo atendimento (Menu)`);
                 return;
             }
 
-            // CASO 2: CLIENTE NOVO
+            // CLIENTE NOVO
             session.step = 'WAITING_FOR_INFO';
             userSessions.set(contactId, session);
-            await reply("Olá! Você está entrando em contato com o Escritório Valéria Daré Advocacia.\n\nPara iniciarmos, por gentileza, me informe seu Nome e Sobrenome.");
+            await reply("Olá!");
+            await reply("Você está entrando em contato com o Escritório Valéria Daré Advocacia.");
+            await reply("Para iniciarmos, por gentileza, me informe seu *nome e sobrenome*.");
             return;
         }
 
-        // 1.5 Decisão do Cliente Retornante
         if (session.step === 'RETURNING_USER') {
             const opcao = texto.replace(/\D/g, ''); 
 
             if (opcao === '1') {
-                const dept = DEPARTMENTS[5]; // "Outros" / Geral
+                const dept = DEPARTMENTS[5];
                 session.selectedDept = dept;
                 
                 await reply(`Entendido, ${session.clientName}. Vou avisar nossa equipe que você deseja continuar o atendimento.`);
                 
                 session.motivo = "Cliente retornante: Continuidade de atendimento";
-                // Finaliza fluxo para marcar notificação
-                session.step = 'WAITING_FOR_SCHEDULING'; // Pula para a etapa de finalização
+                session.step = 'WAITING_FOR_SCHEDULING'; 
                 
-                const linkZap = `https://wa.me/${contactId.replace('@c.us', '')}`;
-                
-                // ALERTA INTERNO
-                await chat.markUnread();
-                const meuNumero = client.info.wid._serialized;
-                const alertaInterno = `🚨 *CLIENTE RETORNANTE* 🚨\n\n` +
-                                      `👤 *Nome:* ${session.clientName}\n` +
-                                      `📝 *Pedido:* Continuidade de atendimento\n` +
-                                      `🔗 *Link:* ${linkZap}`;
-                await client.sendMessage(meuNumero, alertaInterno);
+                // Dispara alerta interno
+                try {
+                    await chat.markUnread();
+                    const meuNumero = client.info.wid.user + '@c.us'; 
+                    const linkZap = `https://wa.me/${contactId.replace('@c.us', '')}`;
+                    const alerta = `🚨 *RETORNO CLIENTE* 🚨\n👤 ${session.clientName}\n🔗 ${linkZap}`;
+                    await client.sendMessage(meuNumero, alerta);
+                } catch(e) {}
 
                 session.step = 'COMPLETED';
                 userSessions.set(contactId, session);
                 return;
 
             } else if (opcao === '2') {
-                let menu = `Perfeito, ${session.clientName}. Selecione o assunto:\n\n`;
+                // Vai para o menu
+                let menu = `Certo, ${session.clientName}!\nComo podemos te ajudar hoje?\nPor gentileza, digite o NÚMERO da opção desejada:\n\n`;
                 Object.keys(DEPARTMENTS).forEach(key => {
                     menu += `*${key}* - ${DEPARTMENTS[key].name}\n`;
                 });
@@ -345,14 +326,12 @@ client.on('message', async (msg) => {
                 userSessions.set(contactId, session);
                 await reply(menu);
                 return;
-
             } else {
-                await reply("Por favor, digite *1* para continuar o anterior ou *2* para novo assunto.");
+                await reply("Por favor, digite *1* para continuar ou *2* para novo assunto.");
                 return;
             }
         }
 
-        // 2. Recebe Nome (Só para novos)
         if (session.step === 'WAITING_FOR_INFO') {
             const nome = texto.split(" ")[0];
             if (texto.length < 3) {
@@ -363,20 +342,17 @@ client.on('message', async (msg) => {
             session.clientInfo = texto; 
             session.clientName = nome;
 
-            let menu = `Certo, ${nome}! Como podemos te ajudar hoje?\n\n` +
-                       `Por gentileza, digite o NÚMERO da opção desejada:\n\n`;
+            let menu = `Certo, ${nome}!\nComo podemos te ajudar hoje?\nPor gentileza, digite o NÚMERO da opção desejada:\n\n`;
             Object.keys(DEPARTMENTS).forEach(key => {
                 menu += `*${key}* - ${DEPARTMENTS[key].name}\n`;
             });
 
             session.step = 'WAITING_FOR_SELECTION';
             userSessions.set(contactId, session);
-            
             await reply(menu);
             return;
         }
 
-        // 3. Escolha do Menu
         if (session.step === 'WAITING_FOR_SELECTION') {
             const opcao = parseInt(texto.replace(/\D/g, ''));
             let dept = null;
@@ -384,87 +360,79 @@ client.on('message', async (msg) => {
             if (DEPARTMENTS[opcao]) {
                 dept = DEPARTMENTS[opcao];
             } else {
-                await reply("Desculpe, não entendi.\nPoderia por gentileza digitar novamente o NÚMERO da opção desejada? (ex: 1, 2, 3...).");
+                await reply("Desculpe, não entendi.\nPoderia por gentileza, digitar o *NÚMERO* da opção desejada?");
                 return;
             }
 
             session.selectedDept = dept;
             session.step = 'WAITING_FOR_REASON';
             userSessions.set(contactId, session);
-            await reply(`Ok, ${session.clientName}. Se você pudesse resumir em poucas palavras a escolha desse assunto, qual seria?`);
+            await reply(`Ok, ${session.clientName}. Se pudesse resumir em poucas palavras a escolha desse assunto, qual seria?`);
             return;
         }
 
-        // 4. Recebe Motivo -> Pergunta Agendamento
         if (session.step === 'WAITING_FOR_REASON') {
             session.motivo = texto;
             session.step = 'WAITING_FOR_SCHEDULING';
             userSessions.set(contactId, session);
             
-            // Pergunta mais humanizada e flexível
-            await reply("Entendi perfeitamente. \n\nPara agilizarmos o seu atendimento, você já gostaria de deixar uma reunião agendada com a nossa equipe? (Pode responder como preferir, ex: 'Sim', 'Por favor', 'Pode ser')");
+            await reply("Perfeito.");
+            await reply("Para agilizarmos o seu atendimento, gostaria de deixar uma reunião agendada com a nossa equipe?");
+            await reply("Por gentileza, digite o NÚMERO da opção desejada:\n\n1 - Sim, por favor!\n2 - Quero falar com o atendente.");
             return;
         }
 
-        // 5. Agendamento -> Fim
         if (session.step === 'WAITING_FOR_SCHEDULING') {
             const dept = session.selectedDept;
             const motivo = session.motivo;
             const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
             
-            // Regex expandido para entender "humanês" (aceita "por favor", "pode ser", etc)
-            const querAgendar = /^(sim|s|claro|com certeza|quero|aham|yes|pode ser|por favor|gostaria|agendar|ok|tá bom|beleza|topo|pode|pode sim|uhum|com certeza)/i.test(lowerText);
+            const opcao = texto.replace(/\D/g, ''); 
 
-            let msgFinal = `Perfeito, já estamos transferindo o seu atendimento para o responsável de: *${dept.name}*.\n\n` +
-                           `Aguarde um momento, por gentileza.`;
-
-            if (querAgendar && GOOGLE_AGENDA_LINK) {
-                msgFinal += `\n\n📅 *Agendamento:* Como você optou por agendar, acesse o link abaixo para escolher o melhor horário:\n${GOOGLE_AGENDA_LINK}`;
+            if (opcao === '1') {
+                await reply(`📅 *Agendamento:*\n\nComo você optou por agendar, acesse o link abaixo para escolher o melhor horário:\n${GOOGLE_AGENDA_LINK}`);
+            } else if (opcao === '2') {
+                await reply(`Perfeito, já estamos transferindo o seu atendimento para o responsável de: *${dept.name}*.`);
+            } else {
+                await reply("Por favor, digite apenas *1* (Sim) ou *2* (Falar com atendente).");
+                return;
             }
 
             if (!isBusinessHours()) {
-                msgFinal += `\n\n🕒 *Nota:* Estamos fora do nosso horário comercial (09h-18h). Responderemos seu caso o mais rápido possível.`;
+                await reply(`Excelente! Já anotamos tudo.\nEm breve terá nosso retorno.\n\n🕒 *Nota:* Estamos fora do horário comercial, responderemos assim que possível.`);
+            } else {
+                await reply(`Excelente! Já anotamos tudo.\nEm breve terá nosso retorno.`);
             }
 
-            await reply(msgFinal);
+            await delay(1000); 
 
             // SALVA O CLIENTE NA MEMÓRIA
             salvarCliente(contactId.replace('@c.us', ''), session.clientName);
 
-            // ============================================
-            // ALERTA INTERNO (PARA O ATENDENTE DO BOT)
-            // ============================================
-            
-            // 1. Marca a conversa do cliente como "NÃO LIDA" (Bolinha verde)
+            // ALERTA INTERNO
             try {
                 await chat.markUnread();
-            } catch (e) {
-                console.error("Erro ao marcar como não lida:", e.message);
-            }
-
-            // 2. Envia notificação para o "Eu" (Anotações do WhatsApp)
-            try {
-                const meuNumero = client.info.wid._serialized;
+                const meuNumero = client.info.wid.user + '@c.us'; 
                 const linkZap = `https://wa.me/${contactId.replace('@c.us', '')}`;
                 
                 const alertaInterno = `🚨 *NOVA TRIAGEM FINALIZADA* 🚨\n\n` +
                                       `👤 *Cliente:* ${session.clientName}\n` +
                                       `📂 *Dept:* ${dept.name}\n` +
                                       `📝 *Resumo:* ${motivo}\n` +
-                                      `🔗 *Clique para atender:* ${linkZap}`;
+                                      `📅 *Agendou?* ${opcao === '1' ? 'SIM' : 'NÃO'}\n` +
+                                      `🔗 *Link:* ${linkZap}`;
                 
                 await client.sendMessage(meuNumero, alertaInterno);
             } catch (e) {
-                console.error("Erro ao enviar alerta interno:", e.message);
+                console.error("Erro alerta interno:", e.message);
             }
 
-            // REMOVIDO: Notificação externa para advogado, para centralizar no número do bot.
-            
             enviarDadosParaAPI({
                 telefone: contactId.replace('@c.us', ''),
                 nome: session.clientInfo,
                 motivo: motivo,
                 departamento: dept.name,
+                agendou: opcao === '1',
                 data: new Date().toISOString()
             });
 
