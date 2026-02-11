@@ -255,7 +255,7 @@ client.on('message', async (msg) => {
         let session = userSessions.get(contactId) || { step: 'IDLE', lastInteraction: Date.now() };
 
         // Regex de saudação (Com limite de palavra \b para evitar "Higor" = "Hi")
-        const saudacaoRegex = /^(oi+|ol[áa]+|opa+|eai|hello|hi|b[ou]m\s+dia|boa\s+tarde|boa\s+noite|tudo\s+bem|iniciar|começar|reset|sair|cancelar|encerrar|fim|doutora|dra)\b/i;
+        const saudacaoRegex = /^(oi+|ol[áa]+|opa+|eai|hello|hi|b[ou]m\s+dia|boa\s+tarde|boa\s+noite|tudo\s+bem|iniciar|começar|reset|sair|cancelar|encerrar|fim|doutora|dra|bom dia!|Bom dia!|Boa tarde!|Boa noite!|)\b/i;
         
         if (saudacaoRegex.test(lowerText)) {
             // Se estiver no menu de retorno (1 ou 2), não reseta imediatamente
@@ -495,3 +495,4 @@ const startBot = async () => {
 };
 
 startBot();
+
