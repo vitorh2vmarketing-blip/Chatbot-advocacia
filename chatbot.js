@@ -6,6 +6,7 @@
 // - Menu numérico final para agendamento
 // - Proteção Anti-Crash e Persistência de Dados
 // - Configurado para Railway (Headless True)
+// - CORREÇÃO: Busca robusta do chat "Eu" (Anotações)
 // ============================================================
 
 // ------------------------------------------------------------
@@ -322,14 +323,25 @@ client.on('message', async (msg) => {
                 session.motivo = "Retorno de Cliente: Continuidade de atendimento";
                 session.step = 'WAITING_FOR_SCHEDULING'; 
                 
-                // Dispara alerta interno
+                // --- ALERTA INTERNO ROBUSTO (PARA RETORNO) ---
                 try {
                     await chat.markUnread();
-                    const meuNumero = client.info.wid.user + '@c.us'; 
+                    // Busca o contato do próprio bot para garantir que achamos o chat certo ("Você")
+                    const contatoProprio = await client.getContactById(client.info.wid._serialized);
+                    const chatProprio = await contatoProprio.getChat();
+                    
                     const linkZap = `https://wa.me/${contactId.replace('@c.us', '')}`;
-                    const alerta = `🚨 *CLIENTE RETORNANTE* 🚨\n👤 ${session.clientName}\n🔗 ${linkZap}`;
-                    await client.sendMessage(meuNumero, alerta);
-                } catch(e) {}
+                    const alertaInterno = `🚨 *CLIENTE RETORNANTE* 🚨\n\n` +
+                                          `👤 *Nome:* ${session.clientName}\n` +
+                                          `📝 *Pedido:* Continuidade de atendimento\n` +
+                                          `🔗 *Link:* ${linkZap}`;
+                                          
+                    await chatProprio.sendMessage(alertaInterno);
+                } catch(e) {
+                    console.error("Erro alerta interno (retorno):", e.message);
+                    // Fallback
+                    try { await client.sendMessage(client.info.wid.user + '@c.us', `🚨 Alerta: Cliente retornou.`); } catch (e2) {}
+                }
 
                 session.step = 'COMPLETED';
                 userSessions.set(contactId, session);
@@ -434,10 +446,14 @@ client.on('message', async (msg) => {
             // SALVA O CLIENTE NA MEMÓRIA
             salvarCliente(contactId.replace('@c.us', ''), session.clientName);
 
-            // ALERTA INTERNO
+            // --- ALERTA INTERNO ROBUSTO ---
             try {
                 await chat.markUnread();
-                const meuNumero = client.info.wid.user + '@c.us'; 
+                
+                // Busca o contato do próprio bot para garantir que achamos o chat certo ("Você")
+                const contatoProprio = await client.getContactById(client.info.wid._serialized);
+                const chatProprio = await contatoProprio.getChat();
+                
                 const linkZap = `https://wa.me/${contactId.replace('@c.us', '')}`;
                 
                 const alertaInterno = `🚨 *NOVA TRIAGEM FINALIZADA* 🚨\n\n` +
@@ -447,9 +463,11 @@ client.on('message', async (msg) => {
                                       `📅 *Agendou?* ${opcao === '1' ? 'SIM (Link enviado)' : 'NÃO (Transferido)'}\n` +
                                       `🔗 *Clique para atender:* ${linkZap}`;
                 
-                await client.sendMessage(meuNumero, alertaInterno);
+                await chatProprio.sendMessage(alertaInterno);
             } catch (e) {
                 console.error("Erro alerta interno:", e.message);
+                // Fallback: Tenta enviar usando o ID manual se a busca falhar
+                try { await client.sendMessage(client.info.wid.user + '@c.us', `🚨 Alerta: Novo cliente finalizou triagem.`); } catch (e2) {}
             }
 
             enviarDadosParaAPI({
