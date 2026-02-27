@@ -7,6 +7,7 @@
 // - Proteção Anti-Crash e Persistência de Dados
 // - Configurado para Railway (Headless True)
 // - CORREÇÃO: Busca robusta do chat "Eu" (Anotações)
+// - NOVO: Intervenção Humana (Pausa o bot se a secretária assumir)
 // ============================================================
 
 // ------------------------------------------------------------
@@ -27,6 +28,9 @@ const qrcodeImage = require('qrcode');
 const fs = require('fs');
 const path = require('path');
 
+// Caractere invisível usado para o bot saber o que ele mesmo enviou vs o que a secretária enviou
+const BOT_SIGNATURE = '\u200D'; 
+
 // =====================================
 // PROTEÇÃO CONTRA FALHAS
 // =====================================
@@ -41,20 +45,16 @@ process.on('uncaughtException', (err) => {
 // CONFIGURAÇÕES
 // =====================================
 const PORT = process.env.PORT || 3000;
-// ATENÇÃO: Webhook de teste. Para produção, troque se necessário.
 const API_URL = "https://webhook.site/cc903f72-48a6-47a1-bb06-c89f5c6eefe2";
 const WORK_HOUR_START = 9;
 const WORK_HOUR_END = 18;
 const GOOGLE_AGENDA_LINK = "https://calendar.app.google/HCshHssc9GugZBaCA"; 
 
 // --- CONFIGURAÇÃO DE PERSISTÊNCIA (RAILWAY) ---
-// Define onde os dados serão salvos.
-// Se estiver no Railway com Volume, usa o caminho do volume. Se for local, usa a pasta 'data'.
 const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH 
     ? process.env.RAILWAY_VOLUME_MOUNT_PATH 
     : path.join(__dirname, 'data');
 
-// Garante que a pasta de dados existe
 if (!fs.existsSync(DATA_DIR)) {
     try {
         fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -64,7 +64,6 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 const DB_FILE = path.join(DATA_DIR, 'clientes_db.json');
-// A pasta .wwebjs_auth deve ficar DENTRO do volume para não ser apagada
 const AUTH_PATH = path.join(DATA_DIR, '.wwebjs_auth');
 
 if (!fs.existsSync(DB_FILE)) {
@@ -126,7 +125,6 @@ function salvarCliente(telefone, nome) {
 // =====================================
 function isBusinessHours() {
     const agora = new Date();
-    // Ajuste UTC-3 (Brasil)
     const horaBrasilia = new Date(agora.toLocaleString("en-US", {timeZone: "America/Sao_Paulo"}));
     const diaSemana = horaBrasilia.getDay(); 
     const hora = horaBrasilia.getHours();
@@ -140,15 +138,24 @@ setInterval(async () => {
     const now = Date.now();
     const TEMPO_AVISO = 15 * 60 * 1000;  // 15 min
     const TEMPO_LIMITE = 30 * 60 * 1000; // 30 min
+    const TEMPO_PAUSADO = 2 * 60 * 60 * 1000; // 2 horas de pausa se humano assumir
 
     for (const [key, session] of userSessions.entries()) {
         const tempoInativo = now - session.lastInteraction;
+
+        // Se estiver pausado (humano assumiu), espera 2 horas de silêncio para resetar e não manda avisos.
+        if (session.step === 'PAUSED') {
+            if (tempoInativo > TEMPO_PAUSADO) {
+                userSessions.delete(key);
+            }
+            continue; // Pula o resto das verificações para esse cliente
+        }
 
         // Aviso de 15 minutos
         if (tempoInativo > TEMPO_AVISO && !session.avisoInatividadeEnviado) {
             if (session.step !== 'IDLE' && session.step !== 'COMPLETED') {
                 try {
-                    await client.sendMessage(key, "Importante: Caso não haja retorno em até 30 minutos, a conversa será reiniciada.");
+                    await client.sendMessage(key, "Importante: Caso não haja retorno em até 30 minutos, a conversa será reiniciada." + BOT_SIGNATURE);
                     session.avisoInatividadeEnviado = true;
                     userSessions.set(key, session);
                 } catch (e) {}
@@ -188,7 +195,7 @@ const client = new Client({
     }),
     webVersionCache: { type: 'none' }, 
     puppeteer: {
-        headless: true, // OBRIGATÓRIO PARA NUVEM
+        headless: true,
         args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",
@@ -223,11 +230,6 @@ client.on('authenticated', () => {
 
 client.on('auth_failure', (msg) => {
     log(`❌ Falha na autenticação: ${msg}`);
-    // ATENÇÃO: Removi a exclusão automática da pasta para evitar perda de sessão
-    // se o erro for apenas temporário durante a atualização.
-    // try {
-    //    if (fs.existsSync(AUTH_PATH)) fs.rmSync(AUTH_PATH, { recursive: true, force: true });
-    // } catch (e) {}
 });
 
 client.on('disconnected', (reason) => {
@@ -236,7 +238,52 @@ client.on('disconnected', (reason) => {
 });
 
 // =====================================
-// LÓGICA DE MENSAGENS
+// INTERVENÇÃO HUMANA (MESSAGE_CREATE)
+// =====================================
+// Este evento captura inclusive as mensagens enviadas PELO SEU CELULAR
+client.on('message_create', async (msg) => {
+    try {
+        if (msg.fromMe) {
+            const contactId = msg.to;
+            
+            // Ignora status e grupos
+            if (contactId.endsWith('@g.us') || msg.isStatus) return;
+
+            // Verifica se a mensagem tem a assinatura invisível do Bot
+            const isBotMessage = msg.body && msg.body.includes(BOT_SIGNATURE);
+
+            // Comando manual para "despausar" o bot
+            if (!isBotMessage && msg.body && msg.body.trim() === '/retomar') {
+                userSessions.delete(contactId);
+                log(`▶️ Bot RETOMADO manualmente para: ${contactId}`);
+                try { await msg.delete(true); } catch(e) {} // Tenta apagar a msg /retomar para o cliente não ver
+                return;
+            }
+
+            // Se for uma mensagem humana (Valkiria assumiu o controle)
+            if (!isBotMessage) {
+                let session = userSessions.get(contactId) || { step: 'IDLE', lastInteraction: Date.now() };
+                
+                // Se o bot não estava pausado, agora ele entra em PAUSA
+                if (session.step !== 'PAUSED') {
+                    session.step = 'PAUSED';
+                    session.lastInteraction = Date.now();
+                    userSessions.set(contactId, session);
+                    log(`⏸️ INTERVENÇÃO HUMANA: Bot pausado automaticamente para o chat ${contactId}`);
+                } else {
+                    // Apenas renova o tempo para o bot continuar dormindo enquanto ela fala
+                    session.lastInteraction = Date.now();
+                    userSessions.set(contactId, session);
+                }
+            }
+        }
+    } catch (e) {
+        console.error("Erro no interceptador humano:", e.message);
+    }
+});
+
+// =====================================
+// LÓGICA DE MENSAGENS RECEBIDAS
 // =====================================
 client.on('message', async (msg) => {
     try {
@@ -245,8 +292,6 @@ client.on('message', async (msg) => {
         const ehGrupo = deQuem.endsWith('@g.us');
         const ehStatus = msg.isStatus;
         
-        log(`📩 Debug: Recebi msg de ${deQuem} -> "${msg.body}"`);
-
         // FILTROS DE SEGURANÇA
         if (msg.timestamp < BOT_START_TIMESTAMP) return;
         if (!deQuem || ehGrupo || ehStatus) return;
@@ -254,6 +299,29 @@ client.on('message', async (msg) => {
 
         const tiposIgnorados = ['e2e_notification', 'notification_template', 'call_log', 'protocol', 'ciphertext', 'revoked', 'gp2', 'sticker'];
         if (tiposIgnorados.includes(tipoMsg)) return;
+
+        // >>> NOVO: TRATAMENTO DE ÁUDIOS <<<
+        if (tipoMsg === 'ptt' || tipoMsg === 'audio') {
+            let session = userSessions.get(msg.from) || { step: 'IDLE', lastInteraction: Date.now() };
+            
+            // Se o bot estiver pausado (Valkiria assumiu), ignora o áudio do cliente em silêncio
+            if (session.step === 'PAUSED') {
+                session.lastInteraction = Date.now();
+                userSessions.set(msg.from, session);
+                return;
+            }
+
+            const chat = await msg.getChat();
+            await chat.sendStateTyping();
+            await delay(1500);
+            await client.sendMessage(msg.from, "Desculpe, ainda não consigo ouvir áudios. 🎧\nPor gentileza, envie a sua resposta em *texto* para que possamos continuar o atendimento." + BOT_SIGNATURE);
+            
+            // Renova o tempo para não dar timeout
+            session.lastInteraction = Date.now();
+            userSessions.set(msg.from, session);
+            return; // Interrompe a leitura aqui e espera o cliente digitar
+        }
+
         if (!msg.body || msg.body.trim().length === 0) return;
 
         const chat = await msg.getChat();
@@ -262,6 +330,13 @@ client.on('message', async (msg) => {
         const lowerText = texto.toLowerCase();
 
         let session = userSessions.get(contactId) || { step: 'IDLE', lastInteraction: Date.now() };
+
+        // >>> SE O BOT ESTIVER PAUSADO (HUMANO ATENDENDO), IGNORA A MSG DO CLIENTE <<<
+        if (session.step === 'PAUSED') {
+            session.lastInteraction = Date.now(); // Renova o tempo de "silêncio"
+            userSessions.set(contactId, session);
+            return; 
+        }
 
         // Reseta aviso se usuário interagiu
         session.lastInteraction = Date.now();
@@ -279,10 +354,11 @@ client.on('message', async (msg) => {
 
         if (session.step === 'COMPLETED') return;
 
+        // Função de envio com Assinatura do Bot
         const reply = async (txt) => {
             await chat.sendStateTyping();
             await delay(1000 + Math.random() * 1000);
-            await client.sendMessage(contactId, txt);
+            await client.sendMessage(contactId, txt + BOT_SIGNATURE);
         };
 
         // --- FLUXO INTELIGENTE ---
@@ -298,7 +374,7 @@ client.on('message', async (msg) => {
                 session.step = 'RETURNING_USER'; 
                 userSessions.set(contactId, session);
 
-                await reply(`Olá, *${clienteSalvo.nome}*! 👋\nQue bom ter você de volta.\n\nComo posso ajudar hoje?\n\n1️⃣ - Falar sobre o caso anterior\n2️⃣ - Iniciar um novo atendimento (Menu)`);
+                await reply(`Olá novamente, *${clienteSalvo.nome}*! 👋\nQue bom ter você de volta.\n\nComo posso ajudar hoje?\n\n1️⃣ - Falar sobre o caso anterior\n2️⃣ - Iniciar um novo atendimento (Menu)`);
                 return;
             }
 
@@ -323,24 +399,24 @@ client.on('message', async (msg) => {
                 session.motivo = "Retorno de Cliente: Continuidade de atendimento";
                 session.step = 'WAITING_FOR_SCHEDULING'; 
                 
+                const linkZap = `https://wa.me/${contactId.replace('@c.us', '')}`;
+                const alertaInterno = `🚨 *CLIENTE RETORNANTE* 🚨\n\n` +
+                                      `👤 *Nome:* ${session.clientName}\n` +
+                                      `📝 *Pedido:* Continuidade de atendimento\n` +
+                                      `🔗 *Link:* ${linkZap}`;
+
                 // --- ALERTA INTERNO ROBUSTO (PARA RETORNO) ---
                 try {
                     await chat.markUnread();
-                    // Busca o contato do próprio bot para garantir que achamos o chat certo ("Você")
                     const contatoProprio = await client.getContactById(client.info.wid._serialized);
                     const chatProprio = await contatoProprio.getChat();
                     
-                    const linkZap = `https://wa.me/${contactId.replace('@c.us', '')}`;
-                    const alertaInterno = `🚨 *CLIENTE RETORNANTE* 🚨\n\n` +
-                                          `👤 *Nome:* ${session.clientName}\n` +
-                                          `📝 *Pedido:* Continuidade de atendimento\n` +
-                                          `🔗 *Link:* ${linkZap}`;
-                                          
-                    await chatProprio.sendMessage(alertaInterno);
+                    await chatProprio.sendMessage(alertaInterno + BOT_SIGNATURE);
                 } catch(e) {
                     console.error("Erro alerta interno (retorno):", e.message);
-                    // Fallback
-                    try { await client.sendMessage(client.info.wid.user + '@c.us', `🚨 Alerta: Cliente retornou.`); } catch (e2) {}
+                    try { 
+                        await client.sendMessage(client.info.wid.user + '@c.us', alertaInterno + BOT_SIGNATURE); 
+                    } catch (e2) {}
                 }
 
                 session.step = 'COMPLETED';
@@ -405,20 +481,17 @@ client.on('message', async (msg) => {
             return;
         }
 
-        // 4. Recebe Motivo -> Pergunta Agendamento (Com Menu 1 e 2)
         if (session.step === 'WAITING_FOR_REASON') {
             session.motivo = texto;
             session.step = 'WAITING_FOR_SCHEDULING';
             userSessions.set(contactId, session);
             
-            // Mensagens divididas para melhor fluxo de leitura
             await reply("Perfeito.");
             await reply("Para agilizarmos o seu atendimento, gostaria de deixar uma reunião agendada com a nossa equipe?");
             await reply("Por gentileza, digite o NÚMERO da opção desejada:\n\n1 - Sim, por favor!\n2 - Quero falar com o atendente.");
             return;
         }
 
-        // 5. Agendamento -> Fim
         if (session.step === 'WAITING_FOR_SCHEDULING') {
             const dept = session.selectedDept;
             const motivo = session.motivo;
@@ -446,28 +519,26 @@ client.on('message', async (msg) => {
             // SALVA O CLIENTE NA MEMÓRIA
             salvarCliente(contactId.replace('@c.us', ''), session.clientName);
 
+            const linkZap = `https://wa.me/${contactId.replace('@c.us', '')}`;
+            const alertaInterno = `🚨 *NOVA TRIAGEM FINALIZADA* 🚨\n\n` +
+                                  `👤 *Cliente:* ${session.clientName}\n` +
+                                  `📂 *Dept:* ${dept.name}\n` +
+                                  `📝 *Resumo:* ${motivo}\n` +
+                                  `📅 *Agendou?* ${opcao === '1' ? 'SIM (Link enviado)' : 'NÃO (Transferido)'}\n` +
+                                  `🔗 *Clique para atender:* ${linkZap}`;
+
             // --- ALERTA INTERNO ROBUSTO ---
             try {
                 await chat.markUnread();
-                
-                // Busca o contato do próprio bot para garantir que achamos o chat certo ("Você")
                 const contatoProprio = await client.getContactById(client.info.wid._serialized);
                 const chatProprio = await contatoProprio.getChat();
                 
-                const linkZap = `https://wa.me/${contactId.replace('@c.us', '')}`;
-                
-                const alertaInterno = `🚨 *NOVA TRIAGEM FINALIZADA* 🚨\n\n` +
-                                      `👤 *Cliente:* ${session.clientName}\n` +
-                                      `📂 *Dept:* ${dept.name}\n` +
-                                      `📝 *Resumo:* ${motivo}\n` +
-                                      `📅 *Agendou?* ${opcao === '1' ? 'SIM (Link enviado)' : 'NÃO (Transferido)'}\n` +
-                                      `🔗 *Clique para atender:* ${linkZap}`;
-                
-                await chatProprio.sendMessage(alertaInterno);
+                await chatProprio.sendMessage(alertaInterno + BOT_SIGNATURE);
             } catch (e) {
                 console.error("Erro alerta interno:", e.message);
-                // Fallback: Tenta enviar usando o ID manual se a busca falhar
-                try { await client.sendMessage(client.info.wid.user + '@c.us', `🚨 Alerta: Novo cliente finalizou triagem.`); } catch (e2) {}
+                try { 
+                    await client.sendMessage(client.info.wid.user + '@c.us', alertaInterno + BOT_SIGNATURE); 
+                } catch (e2) {}
             }
 
             enviarDadosParaAPI({
