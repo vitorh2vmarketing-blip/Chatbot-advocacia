@@ -1,14 +1,14 @@
 // ============================================================
-// BOT VALÉRIA DARÉ - VERSÃO FINAL (ENTREGA 1.2 - DOCX + IA)
+// BOT VALÉRIA DARÉ - VERSÃO FINAL (ENTREGA 1.4 - FOLLOW-UP E MEMÓRIA DE TRIAGEM)
 // ============================================================
 // Recursos:
 // - Textos EXATAMENTE iguais ao arquivo chatbot.docx
 // - Menu numérico final para agendamento (1 ou 2)
-// - Proteção Anti-Crash e Persistência de Dados
-// - Busca robusta do chat "Eu" (Anotações)
-// - Intervenção Humana (Pausa o bot se a secretária assumir)
+// - Proteção Absoluta contra Intervenção Indevida (Coma de 24h)
+// - Trava Anti-Saudação na hora de pedir o nome ("Certo, Boa!")
 // - Tratamento de Áudios (Pede para enviar texto)
-// - LÓGICA INTELIGENTE: Filtros para extração de nomes e menus
+// - NOVO: Follow-up de 1 hora se o cliente sumir
+// - NOVO: Salvamento do progresso da triagem (não perde ao reiniciar)
 // ============================================================
 
 require('dotenv').config();
@@ -39,19 +39,15 @@ const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH
     : path.join(__dirname, 'data');
 
 if (!fs.existsSync(DATA_DIR)) {
-    try {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-    } catch (e) {
-        console.error('Erro ao criar diretório de dados:', e);
-    }
+    try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (e) {}
 }
 
 const DB_FILE = path.join(DATA_DIR, 'clientes_db.json');
+const SESSOES_FILE = path.join(DATA_DIR, 'sessoes_db.json'); // NOVO: Guarda o progresso
 const AUTH_PATH = path.join(DATA_DIR, '.wwebjs_auth');
 
-if (!fs.existsSync(DB_FILE)) {
-    fs.writeFileSync(DB_FILE, JSON.stringify({}));
-}
+if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify({}));
+if (!fs.existsSync(SESSOES_FILE)) fs.writeFileSync(SESSOES_FILE, JSON.stringify({}));
 
 const BOT_START_TIMESTAMP = Math.floor(Date.now() / 1000);
 const log = (msg) => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
@@ -72,7 +68,42 @@ const DEPARTMENTS = {
 const app = express();
 let currentQRCode = null;
 let isConnected = false;
+
+// =====================================
+// SISTEMA DE MEMÓRIA DE TRIAGEM (NOVO)
+// =====================================
 const userSessions = new Map();
+
+function carregarSessoes() {
+    try {
+        if (fs.existsSync(SESSOES_FILE)) {
+            const data = JSON.parse(fs.readFileSync(SESSOES_FILE));
+            for (const [key, value] of Object.entries(data)) {
+                userSessions.set(key, value);
+            }
+        }
+    } catch (e) { log("Erro ao carregar sessões: " + e.message); }
+}
+
+function salvarSessoes() {
+    try {
+        const obj = Object.fromEntries(userSessions);
+        fs.writeFileSync(SESSOES_FILE, JSON.stringify(obj, null, 2));
+    } catch (e) {}
+}
+
+function updateSession(key, session) {
+    userSessions.set(key, session);
+    salvarSessoes(); // Salva fisicamente toda vez que o cliente avança um passo
+}
+
+function deleteSession(key) {
+    userSessions.delete(key);
+    salvarSessoes();
+}
+
+// Carrega o progresso das pessoas ao iniciar o bot
+carregarSessoes();
 
 // =====================================
 // FUNÇÕES DE INTELIGÊNCIA E LIMPEZA
@@ -93,22 +124,15 @@ function getClienteSalvo(telefone) {
     try {
         const data = JSON.parse(fs.readFileSync(DB_FILE));
         return data[telefone];
-    } catch (e) {
-        return null;
-    }
+    } catch (e) { return null; }
 }
 
 function salvarCliente(telefone, nome) {
     try {
         let data = JSON.parse(fs.readFileSync(DB_FILE));
-        data[telefone] = { 
-            nome: nome, 
-            ultimo_contato: new Date().toISOString() 
-        };
+        data[telefone] = { nome: nome, ultimo_contato: new Date().toISOString() };
         fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-    } catch (e) {
-        console.error("Erro ao salvar cliente:", e.message);
-    }
+    } catch (e) {}
 }
 
 function isBusinessHours() {
@@ -119,34 +143,40 @@ function isBusinessHours() {
     return (diaSemana >= 1 && diaSemana <= 5) && (hora >= WORK_HOUR_START && hora < WORK_HOUR_END);
 }
 
+// =====================================
+// GERENCIADOR DE INATIVIDADE E FOLLOW-UP
+// =====================================
 setInterval(async () => {
     const now = Date.now();
-    const TEMPO_AVISO = 15 * 60 * 1000;  
-    const TEMPO_LIMITE = 30 * 60 * 1000; 
-    const TEMPO_PAUSADO = 2 * 60 * 60 * 1000; 
+    const TEMPO_FOLLOW_UP = 60 * 60 * 1000;  // 1 HORA para enviar mensagem de saudade
+    const TEMPO_EXPIRACAO = 24 * 60 * 60 * 1000; // 24 HORAS para expirar a triagem largada pela metade
+    const TEMPO_PAUSA_LONGA = 24 * 60 * 60 * 1000; // 24 HORAS de paz para a Valkiria trabalhar
 
     for (const [key, session] of userSessions.entries()) {
         const tempoInativo = now - session.lastInteraction;
 
-        if (session.step === 'PAUSED') {
-            if (tempoInativo > TEMPO_PAUSADO) {
-                userSessions.delete(key);
+        // 1. Se a triagem acabou ou a Valkiria assumiu, aguarda 24h de paz.
+        if (session.step === 'PAUSED' || session.step === 'COMPLETED') {
+            if (tempoInativo > TEMPO_PAUSA_LONGA) {
+                deleteSession(key);
             }
             continue; 
         }
 
-        if (tempoInativo > TEMPO_AVISO && !session.avisoInatividadeEnviado) {
-            if (session.step !== 'IDLE' && session.step !== 'COMPLETED') {
+        // 2. Follow-up: O cliente abandonou o bot no meio da triagem há mais de 1 hora
+        if (tempoInativo > TEMPO_FOLLOW_UP && !session.followUpEnviado) {
+            if (session.step !== 'IDLE') {
                 try {
-                    await client.sendMessage(key, "Importante: Caso não haja retorno em até 30 minutos, a conversa será reiniciada." + BOT_SIGNATURE);
-                    session.avisoInatividadeEnviado = true;
-                    userSessions.set(key, session);
+                    await client.sendMessage(key, "Olá, podemos dar sequência no seu atendimento?" + BOT_SIGNATURE);
+                    session.followUpEnviado = true;
+                    updateSession(key, session);
                 } catch (e) {}
             }
         }
 
-        if (tempoInativo > TEMPO_LIMITE) {
-            userSessions.delete(key);
+        // 3. Se a pessoa nunca mais respondeu o follow up em 24h, limpa o sistema para ela recomeçar.
+        if (tempoInativo > TEMPO_EXPIRACAO) {
+            deleteSession(key);
         }
     }
 }, 60000);
@@ -154,34 +184,26 @@ setInterval(async () => {
 async function enviarDadosParaAPI(dados) {
     if (!API_URL || API_URL.includes("seu-link")) return;
     try {
-        if (typeof fetch === 'undefined') return;
-        await fetch(API_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(dados)
-        });
+        if (typeof fetch !== 'undefined') {
+            await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(dados)
+            });
+        }
     } catch (error) {}
 }
 
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
 const client = new Client({
-    authStrategy: new LocalAuth({ 
-        clientId: "valeria_bot",
-        dataPath: AUTH_PATH 
-    }),
+    authStrategy: new LocalAuth({ clientId: "valeria_bot", dataPath: AUTH_PATH }),
     webVersionCache: { type: 'none' }, 
     puppeteer: {
         headless: true,
         args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage", 
-            "--disable-accelerated-2d-canvas",
-            "--no-first-run",
-            "--no-zygote",
-            "--disable-gpu",
-            "--disable-extensions"
+            "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", 
+            "--disable-accelerated-2d-canvas", "--no-first-run", "--no-zygote", "--disable-gpu"
         ]
     }
 });
@@ -194,18 +216,18 @@ client.on('qr', (qr) => {
 });
 
 client.on('ready', () => {
-    log("✅ TUDO PRONTO! O Bot está online.");
+    log("✅ TUDO PRONTO! O Bot está online e com a memória carregada.");
     currentQRCode = null;
     isConnected = true;
 });
 
 client.on('authenticated', () => log("🔐 Sessão autenticada."));
 client.on('auth_failure', (msg) => log(`❌ Falha na autenticação: ${msg}`));
-client.on('disconnected', (reason) => {
-    log(`❌ Desconectado: ${reason}`);
-    isConnected = false;
-});
+client.on('disconnected', (reason) => isConnected = false);
 
+// =====================================
+// INTERVENÇÃO HUMANA DA VALKIRIA
+// =====================================
 client.on('message_create', async (msg) => {
     try {
         if (msg.fromMe) {
@@ -215,7 +237,7 @@ client.on('message_create', async (msg) => {
             const isBotMessage = msg.body && msg.body.includes(BOT_SIGNATURE);
 
             if (!isBotMessage && msg.body && msg.body.trim() === '/retomar') {
-                userSessions.delete(contactId);
+                deleteSession(contactId);
                 log(`▶️ Bot RETOMADO manualmente para: ${contactId}`);
                 try { await msg.delete(true); } catch(e) {} 
                 return;
@@ -226,17 +248,20 @@ client.on('message_create', async (msg) => {
                 if (session.step !== 'PAUSED') {
                     session.step = 'PAUSED';
                     session.lastInteraction = Date.now();
-                    userSessions.set(contactId, session);
-                    log(`⏸️ INTERVENÇÃO HUMANA: Bot pausado para ${contactId}`);
+                    updateSession(contactId, session);
+                    log(`⏸️ INTERVENÇÃO HUMANA: Bot pausado para ${contactId} (Ficará mudo por 24h)`);
                 } else {
                     session.lastInteraction = Date.now();
-                    userSessions.set(contactId, session);
+                    updateSession(contactId, session);
                 }
             }
         }
     } catch (e) {}
 });
 
+// =====================================
+// LÓGICA DE MENSAGENS RECEBIDAS
+// =====================================
 client.on('message', async (msg) => {
     try {
         const tipoMsg = msg.type;
@@ -251,19 +276,31 @@ client.on('message', async (msg) => {
         const tiposIgnorados = ['e2e_notification', 'notification_template', 'call_log', 'protocol', 'ciphertext', 'revoked', 'gp2', 'sticker'];
         if (tiposIgnorados.includes(tipoMsg)) return;
 
+        let session = userSessions.get(deQuem) || { step: 'IDLE', lastInteraction: Date.now() };
+
+        // 🚨 BLOQUEIO ABSOLUTO 1: Se o bot estiver PAUSADO (Valkiria atendeu), ignora QUALQUER COISA que o cliente mandar.
+        if (session.step === 'PAUSED') {
+            session.lastInteraction = Date.now(); 
+            updateSession(deQuem, session);
+            return; 
+        }
+
+        // 🚨 BLOQUEIO ABSOLUTO 2: Se a triagem foi CONCLUÍDA, ignora o cliente por 24h para a Valkiria poder agir.
+        if (session.step === 'COMPLETED') {
+            session.lastInteraction = Date.now();
+            updateSession(deQuem, session);
+            return;
+        }
+
+        // TRATAMENTO DE ÁUDIOS (Só se estiver no meio da triagem)
         if (tipoMsg === 'ptt' || tipoMsg === 'audio') {
-            let session = userSessions.get(msg.from) || { step: 'IDLE', lastInteraction: Date.now() };
-            if (session.step === 'PAUSED') {
-                session.lastInteraction = Date.now();
-                userSessions.set(msg.from, session);
-                return;
-            }
             const chat = await msg.getChat();
             await chat.sendStateTyping();
             await delay(1500);
-            await client.sendMessage(msg.from, "Desculpe, ainda não consigo ouvir áudios. 🎧\nPor gentileza, envie a sua resposta em texto para que possamos continuar o atendimento." + BOT_SIGNATURE);
+            await client.sendMessage(deQuem, "Desculpe, ainda não consigo ouvir áudios. 🎧\nPor gentileza, envie a sua resposta em texto para que possamos continuar o atendimento." + BOT_SIGNATURE);
+            
             session.lastInteraction = Date.now();
-            userSessions.set(msg.from, session);
+            updateSession(deQuem, session);
             return; 
         }
 
@@ -274,28 +311,17 @@ client.on('message', async (msg) => {
         const texto = msg.body.trim();
         const lowerText = texto.toLowerCase();
 
-        let session = userSessions.get(contactId) || { step: 'IDLE', lastInteraction: Date.now() };
-
-        if (session.step === 'PAUSED') {
-            session.lastInteraction = Date.now(); 
-            userSessions.set(contactId, session);
-            return; 
-        }
-
         session.lastInteraction = Date.now();
-        session.avisoInatividadeEnviado = false; 
+        session.followUpEnviado = false; // Se a pessoa respondeu, zera a trava do follow-up
 
-        const comandoReset = /^(iniciar|começar|reset|reiniciar|sair|cancelar|encerrar|fim|menu)\b/i;
-        const saudacaoComum = /^(oi+|ol[áa]+|opa+|eai|hello|hi|b[ou]m\s+dia|boa\s+tarde|boa\s+noite|tudo\s+bem)\b/i;
-        
+        // O cliente só pode resetar o bot SE digitar explicitamente comandos
+        const comandoReset = /^(iniciar|começar|reset|reiniciar|sair|cancelar|encerrar|menu)\b/i;
         if (comandoReset.test(lowerText)) {
             session = { step: 'IDLE', lastInteraction: Date.now() };
-        } else if (saudacaoComum.test(lowerText) && (session.step === 'COMPLETED' || session.step === 'PAUSED' || session.step === 'IDLE')) {
-            session = { step: 'IDLE', lastInteraction: Date.now() };
+            updateSession(contactId, session);
         }
         
-        userSessions.set(contactId, session);
-        if (session.step === 'COMPLETED') return;
+        updateSession(contactId, session);
 
         const reply = async (txt) => {
             await chat.sendStateTyping();
@@ -312,16 +338,15 @@ client.on('message', async (msg) => {
                 session.clientName = clienteSalvo.nome;
                 session.clientInfo = clienteSalvo.nome; 
                 session.step = 'RETURNING_USER'; 
-                userSessions.set(contactId, session);
+                updateSession(contactId, session);
 
                 await reply(`Olá novamente, *${clienteSalvo.nome}*! 👋\nQue bom ter você de volta.\n\nComo posso ajudar hoje?\n\n1️⃣ - Falar sobre o caso anterior\n2️⃣ - Iniciar um novo atendimento (Menu)`);
                 return;
             }
 
             session.step = 'WAITING_FOR_INFO';
-            userSessions.set(contactId, session);
+            updateSession(contactId, session);
             
-            // Textos exatos do DOCX, divididos para leitura
             await reply("Olá!");
             await reply("Você está entrando em contato com o Escritório Valéria Daré Advocacia.");
             await reply("Para iniciarmos, por gentileza, me informe seu nome e sobrenome.");
@@ -357,7 +382,7 @@ client.on('message', async (msg) => {
                 }
 
                 session.step = 'COMPLETED';
-                userSessions.set(contactId, session);
+                updateSession(contactId, session);
                 return;
 
             } else if (opcao === '2') {
@@ -367,7 +392,7 @@ client.on('message', async (msg) => {
                 });
                 
                 session.step = 'WAITING_FOR_SELECTION';
-                userSessions.set(contactId, session);
+                updateSession(contactId, session);
                 await reply(menu);
                 return;
             } else {
@@ -377,6 +402,13 @@ client.on('message', async (msg) => {
         }
 
         if (session.step === 'WAITING_FOR_INFO') {
+            // TRAVA ANTI-SAUDAÇÃO (Resolve o "Certo, Boa!")
+            const isJustGreeting = /^(ok|ola|olá|oi|bom dia|boa tarde|boa noite|tudo bem|sim|beleza|sim podemos|podemos|vamos)[\s.,!?]*$/i.test(texto);
+            if (isJustGreeting) {
+                await reply("Tudo bem! 😊 Por favor, digite apenas o seu *nome e sobrenome* para prosseguirmos.");
+                return;
+            }
+
             const textoLimpo = extrairNomeReal(texto);
 
             if (textoLimpo.length < 3) {
@@ -391,14 +423,13 @@ client.on('message', async (msg) => {
             session.clientInfo = textoLimpo; 
             session.clientName = nomeExtraido;
 
-            // Texto exato do DOCX
             let menu = `Certo, ${nomeExtraido}!\nComo podemos te ajudar hoje?\nPor gentileza, digite o NÚMERO da opção desejada:\n`;
             Object.keys(DEPARTMENTS).forEach(key => {
                 menu += `${key} - ${DEPARTMENTS[key].name}\n`;
             });
 
             session.step = 'WAITING_FOR_SELECTION';
-            userSessions.set(contactId, session);
+            updateSession(contactId, session);
             await reply(menu);
             return;
         }
@@ -417,9 +448,8 @@ client.on('message', async (msg) => {
 
             session.selectedDept = dept;
             session.step = 'WAITING_FOR_REASON';
-            userSessions.set(contactId, session);
+            updateSession(contactId, session);
             
-            // Texto exato do DOCX
             await reply(`Ok, ${session.clientName}. Se pudesse resumir em poucas palavras a escolha desse assunto, qual seria?`);
             return;
         }
@@ -427,9 +457,8 @@ client.on('message', async (msg) => {
         if (session.step === 'WAITING_FOR_REASON') {
             session.motivo = texto;
             session.step = 'WAITING_FOR_SCHEDULING';
-            userSessions.set(contactId, session);
+            updateSession(contactId, session);
             
-            // Texto exato do DOCX, dividido
             await reply("Entendi perfeitamente.");
             await reply("Para agilizarmos o seu atendimento, gostaria de deixar uma reunião agendada com a nossa equipe?");
             await reply("Por gentileza, digite o NÚMERO da opção desejada:\n1 - Sim, por favor!\n2 - Quero falar com o atendente.");
@@ -444,17 +473,14 @@ client.on('message', async (msg) => {
             const opcao = matchOpcao ? matchOpcao[0] : null;
 
             if (opcao === '1') {
-                // Texto exato do DOCX para opção 1
                 await reply(`📅 Agendamento:\nComo você optou por agendar, acesse o link abaixo para escolher o melhor horário:\n${GOOGLE_AGENDA_LINK}`);
             } else if (opcao === '2') {
-                // Texto exato do DOCX para opção 2
                 await reply(`Perfeito, já estamos transferindo o seu atendimento para o responsável de: ${dept.name}.`);
             } else {
                 await reply("Por favor, digite apenas o número 1 (Sim) ou 2 (Falar com atendente).");
                 return;
             }
 
-            // Texto Final exato do DOCX
             if (!isBusinessHours()) {
                 await reply(`Excelente! Já anotamos tudo.\nEm breve terá nosso retorno.\n\n🕒 Nota: Estamos fora do horário comercial, responderemos assim que possível.`);
             } else {
@@ -491,8 +517,9 @@ client.on('message', async (msg) => {
                 data: new Date().toISOString()
             });
 
+            // FINALIZOU A TRIAGEM - BOT ENTRA EM COMA DE 24H (Só atende comando /retomar ou aguarda expirar)
             session.step = 'COMPLETED';
-            userSessions.set(contactId, session);
+            updateSession(contactId, session);
         }
 
     } catch (e) {
