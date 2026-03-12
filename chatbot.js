@@ -1,5 +1,5 @@
 // ============================================================
-// BOT VALÉRIA DARÉ - VERSÃO FINAL (ENTREGA 1.4 - FOLLOW-UP E MEMÓRIA DE TRIAGEM)
+// BOT VALÉRIA DARÉ - VERSÃO FINAL (ENTREGA 1.6 - CORREÇÃO @LID)
 // ============================================================
 // Recursos:
 // - Textos EXATAMENTE iguais ao arquivo chatbot.docx
@@ -7,8 +7,9 @@
 // - Proteção Absoluta contra Intervenção Indevida (Coma de 24h)
 // - Trava Anti-Saudação na hora de pedir o nome ("Certo, Boa!")
 // - Tratamento de Áudios (Pede para enviar texto)
-// - NOVO: Follow-up de 1 hora se o cliente sumir
-// - NOVO: Salvamento do progresso da triagem (não perde ao reiniciar)
+// - Follow-up de 1 hora se o cliente sumir
+// - Salvamento do progresso da triagem (não perde ao reiniciar)
+// - CORREÇÃO: Extração do número real (telefone) contornando o erro @lid
 // ============================================================
 
 require('dotenv').config();
@@ -43,7 +44,7 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 const DB_FILE = path.join(DATA_DIR, 'clientes_db.json');
-const SESSOES_FILE = path.join(DATA_DIR, 'sessoes_db.json'); // NOVO: Guarda o progresso
+const SESSOES_FILE = path.join(DATA_DIR, 'sessoes_db.json'); 
 const AUTH_PATH = path.join(DATA_DIR, '.wwebjs_auth');
 
 if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify({}));
@@ -70,7 +71,7 @@ let currentQRCode = null;
 let isConnected = false;
 
 // =====================================
-// SISTEMA DE MEMÓRIA DE TRIAGEM (NOVO)
+// SISTEMA DE MEMÓRIA DE TRIAGEM
 // =====================================
 const userSessions = new Map();
 
@@ -94,7 +95,7 @@ function salvarSessoes() {
 
 function updateSession(key, session) {
     userSessions.set(key, session);
-    salvarSessoes(); // Salva fisicamente toda vez que o cliente avança um passo
+    salvarSessoes(); 
 }
 
 function deleteSession(key) {
@@ -102,7 +103,6 @@ function deleteSession(key) {
     salvarSessoes();
 }
 
-// Carrega o progresso das pessoas ao iniciar o bot
 carregarSessoes();
 
 // =====================================
@@ -155,7 +155,6 @@ setInterval(async () => {
     for (const [key, session] of userSessions.entries()) {
         const tempoInativo = now - session.lastInteraction;
 
-        // 1. Se a triagem acabou ou a Valkiria assumiu, aguarda 24h de paz.
         if (session.step === 'PAUSED' || session.step === 'COMPLETED') {
             if (tempoInativo > TEMPO_PAUSA_LONGA) {
                 deleteSession(key);
@@ -163,7 +162,6 @@ setInterval(async () => {
             continue; 
         }
 
-        // 2. Follow-up: O cliente abandonou o bot no meio da triagem há mais de 1 hora
         if (tempoInativo > TEMPO_FOLLOW_UP && !session.followUpEnviado) {
             if (session.step !== 'IDLE') {
                 try {
@@ -174,7 +172,6 @@ setInterval(async () => {
             }
         }
 
-        // 3. Se a pessoa nunca mais respondeu o follow up em 24h, limpa o sistema para ela recomeçar.
         if (tempoInativo > TEMPO_EXPIRACAO) {
             deleteSession(key);
         }
@@ -278,21 +275,18 @@ client.on('message', async (msg) => {
 
         let session = userSessions.get(deQuem) || { step: 'IDLE', lastInteraction: Date.now() };
 
-        // 🚨 BLOQUEIO ABSOLUTO 1: Se o bot estiver PAUSADO (Valkiria atendeu), ignora QUALQUER COISA que o cliente mandar.
         if (session.step === 'PAUSED') {
             session.lastInteraction = Date.now(); 
             updateSession(deQuem, session);
             return; 
         }
 
-        // 🚨 BLOQUEIO ABSOLUTO 2: Se a triagem foi CONCLUÍDA, ignora o cliente por 24h para a Valkiria poder agir.
         if (session.step === 'COMPLETED') {
             session.lastInteraction = Date.now();
             updateSession(deQuem, session);
             return;
         }
 
-        // TRATAMENTO DE ÁUDIOS (Só se estiver no meio da triagem)
         if (tipoMsg === 'ptt' || tipoMsg === 'audio') {
             const chat = await msg.getChat();
             await chat.sendStateTyping();
@@ -308,13 +302,28 @@ client.on('message', async (msg) => {
 
         const chat = await msg.getChat();
         const contactId = msg.from;
+
+        // ========================================================
+        // 🛡️ CORREÇÃO DE NÚMERO (LID vs C.US)
+        // ========================================================
+        // Força a extração do número de telefone real do contato
+        // para evitar que o @lid do Multi-Device quebre os links
+        let numeroLimpo = contactId.replace(/[^0-9]/g, ''); // Fallback padrão
+        try {
+            const contatoCliente = await msg.getContact();
+            if (contatoCliente && contatoCliente.number) {
+                numeroLimpo = contatoCliente.number; // Telefone puro, sem sufixos
+            }
+        } catch (e) {
+            console.error("Erro ao obter contato real:", e.message);
+        }
+
         const texto = msg.body.trim();
         const lowerText = texto.toLowerCase();
 
         session.lastInteraction = Date.now();
-        session.followUpEnviado = false; // Se a pessoa respondeu, zera a trava do follow-up
+        session.followUpEnviado = false; 
 
-        // O cliente só pode resetar o bot SE digitar explicitamente comandos
         const comandoReset = /^(iniciar|começar|reset|reiniciar|sair|cancelar|encerrar|menu)\b/i;
         if (comandoReset.test(lowerText)) {
             session = { step: 'IDLE', lastInteraction: Date.now() };
@@ -332,7 +341,8 @@ client.on('message', async (msg) => {
         // --- FLUXO INTELIGENTE ---
 
         if (session.step === 'IDLE') {
-            const clienteSalvo = getClienteSalvo(contactId.replace('@c.us', ''));
+            // Usa o numeroLimpo para garantir que a memória ache o cliente independentemente de LID
+            const clienteSalvo = getClienteSalvo(numeroLimpo);
             
             if (clienteSalvo && clienteSalvo.nome) {
                 session.clientName = clienteSalvo.nome;
@@ -340,7 +350,7 @@ client.on('message', async (msg) => {
                 session.step = 'RETURNING_USER'; 
                 updateSession(contactId, session);
 
-                await reply(`Olá, *${clienteSalvo.nome}*! 👋\nQue bom ter você de volta.\n\nComo posso ajudar hoje?\n\n1️⃣ - Falar sobre o caso anterior\n2️⃣ - Iniciar um novo atendimento (Menu)`);
+                await reply(`Olá novamente, *${clienteSalvo.nome}*! 👋\nQue bom ter você de volta.\n\nComo posso ajudar hoje?\n\n1️⃣ - Falar sobre o caso anterior\n2️⃣ - Iniciar um novo atendimento (Menu)`);
                 return;
             }
 
@@ -348,8 +358,8 @@ client.on('message', async (msg) => {
             updateSession(contactId, session);
             
             await reply("Olá!");
-            await reply("Você está entrando em contato com o Escritório Valéria Daré Advocacia.");
-            await reply("Para iniciarmos, por gentileza, me informe seu nome e sobrenome.");
+            await reply("Somos o Escritório Valéria Daré Advocacia.");
+            await reply("Para iniciarmos o seu atendimento, por gentileza, me informe o seu nome e sobrenome.");
             return;
         }
 
@@ -366,11 +376,12 @@ client.on('message', async (msg) => {
                 session.motivo = "Retorno de Cliente: Continuidade de atendimento";
                 session.step = 'WAITING_FOR_SCHEDULING'; 
                 
-                const linkZap = `https://wa.me/${contactId.replace('@c.us', '')}`;
+                // Usa o numeroLimpo validado para montar os links
                 const alertaInterno = `🚨 *CLIENTE RETORNANTE* 🚨\n\n` +
                                       `👤 *Nome:* ${session.clientName}\n` +
                                       `📝 *Pedido:* Continuidade de atendimento\n` +
-                                      `🔗 *Link:* ${linkZap}`;
+                                      `📱 *Contato:* +${numeroLimpo}\n` +
+                                      `🔗 *Link Web:* https://wa.me/${numeroLimpo}`;
 
                 try {
                     await chat.markUnread();
@@ -402,10 +413,9 @@ client.on('message', async (msg) => {
         }
 
         if (session.step === 'WAITING_FOR_INFO') {
-            // TRAVA ANTI-SAUDAÇÃO (Resolve o "Certo, Boa!")
             const isJustGreeting = /^(ok|ola|olá|oi|bom dia|boa tarde|boa noite|tudo bem|sim|beleza|sim podemos|podemos|vamos)[\s.,!?]*$/i.test(texto);
             if (isJustGreeting) {
-                await reply("Tudo bem! 😊 Por favor, digite apenas o seu *nome e sobrenome* para prosseguirmos.");
+                await reply("Tudo bem! Por favor, digite apenas o seu *nome e sobrenome* para prosseguirmos.");
                 return;
             }
 
@@ -459,7 +469,7 @@ client.on('message', async (msg) => {
             session.step = 'WAITING_FOR_SCHEDULING';
             updateSession(contactId, session);
             
-            await reply("Certo.");
+            await reply("Ok.");
             await reply("Para agilizarmos o seu atendimento, gostaria de deixar uma reunião agendada com a nossa equipe?");
             await reply("Por gentileza, digite o NÚMERO da opção desejada:\n1 - Sim, por favor!\n2 - Quero falar com o atendente.");
             return;
@@ -482,17 +492,16 @@ client.on('message', async (msg) => {
             }
 
             if (!isBusinessHours()) {
-                await reply(`Excelente! Já anotamos tudo.\nEm breve terá nosso retorno.\n\n🕒 Nota: Estamos fora do horário comercial, responderemos assim que possível.`);
+                await reply(`Perfeito! anotamos o seu caso.\nEm breve um de nossos especialistas entrará em contato.\n\n🕒 Nota: Estamos fora do horário comercial, responderemos assim que possível.');
             } else {
                 await reply(`Maravilha, Estamos analisando seu caso.\nEm breve um de nossos especialistas entrará em contato.`);
             }
 
             await delay(1000); 
 
-            salvarCliente(contactId.replace('@c.us', ''), session.clientName);
+            // Usa o numeroLimpo validado no lugar do ID cru
+            salvarCliente(numeroLimpo, session.clientName);
 
-            // CORREÇÃO: Formatação de número nativo do WhatsApp com "+" para clique direto no app
-            const numeroLimpo = contactId.replace('@c.us', '');
             const alertaInterno = `🚨 *NOVA TRIAGEM FINALIZADA* 🚨\n\n` +
                                   `👤 *Cliente:* ${session.clientName}\n` +
                                   `📂 *Dept:* ${dept.name}\n` +
@@ -500,6 +509,7 @@ client.on('message', async (msg) => {
                                   `📅 *Agendou?* ${opcao === '1' ? 'SIM (Link enviado)' : 'NÃO (Transferido)'}\n` +
                                   `📱 *Contato:* +${numeroLimpo}\n` +
                                   `🔗 *Link Web:* https://wa.me/${numeroLimpo}`;
+
             try {
                 await chat.markUnread();
                 const contatoProprio = await client.getContactById(client.info.wid._serialized);
@@ -510,7 +520,7 @@ client.on('message', async (msg) => {
             }
 
             enviarDadosParaAPI({
-                telefone: contactId.replace('@c.us', ''),
+                telefone: numeroLimpo,
                 nome: session.clientInfo,
                 motivo: motivo,
                 departamento: dept.name,
@@ -518,7 +528,6 @@ client.on('message', async (msg) => {
                 data: new Date().toISOString()
             });
 
-            // FINALIZOU A TRIAGEM - BOT ENTRA EM COMA DE 24H (Só atende comando /retomar ou aguarda expirar)
             session.step = 'COMPLETED';
             updateSession(contactId, session);
         }
@@ -548,4 +557,3 @@ const startBot = async () => {
 };
 
 startBot();
-
