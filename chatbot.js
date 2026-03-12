@@ -340,7 +340,7 @@ client.on('message', async (msg) => {
                 session.step = 'RETURNING_USER'; 
                 updateSession(contactId, session);
 
-                await reply(`Olá novamente, *${clienteSalvo.nome}*! 👋\nQue bom ter você de volta.\n\nComo posso ajudar hoje?\n\n1️⃣ - Falar sobre o caso anterior\n2️⃣ - Iniciar um novo atendimento (Menu)`);
+                await reply(`Olá, *${clienteSalvo.nome}*! 👋\nQue bom ter você de volta.\n\nComo posso ajudar hoje?\n\n1️⃣ - Falar sobre o caso anterior\n2️⃣ - Iniciar um novo atendimento (Menu)`);
                 return;
             }
 
@@ -459,7 +459,7 @@ client.on('message', async (msg) => {
             session.step = 'WAITING_FOR_SCHEDULING';
             updateSession(contactId, session);
             
-            await reply("Entendi perfeitamente.");
+            await reply("Certo.");
             await reply("Para agilizarmos o seu atendimento, gostaria de deixar uma reunião agendada com a nossa equipe?");
             await reply("Por gentileza, digite o NÚMERO da opção desejada:\n1 - Sim, por favor!\n2 - Quero falar com o atendente.");
             return;
@@ -484,21 +484,22 @@ client.on('message', async (msg) => {
             if (!isBusinessHours()) {
                 await reply(`Excelente! Já anotamos tudo.\nEm breve terá nosso retorno.\n\n🕒 Nota: Estamos fora do horário comercial, responderemos assim que possível.`);
             } else {
-                await reply(`Excelente! Já anotamos tudo.\nEm breve terá nosso retorno.`);
+                await reply(`Maravilha, Estamos analisando seu caso.\nEm breve um de nossos especialistas entrará em contato.`);
             }
 
             await delay(1000); 
 
             salvarCliente(contactId.replace('@c.us', ''), session.clientName);
 
-            const linkZap = `https://wa.me/${contactId.replace('@c.us', '')}`;
+            // CORREÇÃO: Formatação de número nativo do WhatsApp com "+" para clique direto no app
+            const numeroLimpo = contactId.replace('@c.us', '');
             const alertaInterno = `🚨 *NOVA TRIAGEM FINALIZADA* 🚨\n\n` +
                                   `👤 *Cliente:* ${session.clientName}\n` +
                                   `📂 *Dept:* ${dept.name}\n` +
                                   `📝 *Resumo:* ${motivo}\n` +
                                   `📅 *Agendou?* ${opcao === '1' ? 'SIM (Link enviado)' : 'NÃO (Transferido)'}\n` +
-                                  `🔗 *Clique para atender:* ${linkZap}`;
-
+                                  `📱 *Contato:* +${numeroLimpo}\n` +
+                                  `🔗 *Link Web:* https://wa.me/${numeroLimpo}`;
             try {
                 await chat.markUnread();
                 const contatoProprio = await client.getContactById(client.info.wid._serialized);
@@ -547,3 +548,4 @@ const startBot = async () => {
 };
 
 startBot();
+
