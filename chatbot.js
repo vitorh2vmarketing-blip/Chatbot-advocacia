@@ -306,13 +306,11 @@ client.on('message', async (msg) => {
         // ========================================================
         // 🛡️ CORREÇÃO DE NÚMERO (LID vs C.US)
         // ========================================================
-        // Força a extração do número de telefone real do contato
-        // para evitar que o @lid do Multi-Device quebre os links
-        let numeroLimpo = contactId.replace(/[^0-9]/g, ''); // Fallback padrão
+        let numeroLimpo = contactId.replace(/[^0-9]/g, ''); 
         try {
             const contatoCliente = await msg.getContact();
             if (contatoCliente && contatoCliente.number) {
-                numeroLimpo = contatoCliente.number; // Telefone puro, sem sufixos
+                numeroLimpo = contatoCliente.number; 
             }
         } catch (e) {
             console.error("Erro ao obter contato real:", e.message);
@@ -341,7 +339,6 @@ client.on('message', async (msg) => {
         // --- FLUXO INTELIGENTE ---
 
         if (session.step === 'IDLE') {
-            // Usa o numeroLimpo para garantir que a memória ache o cliente independentemente de LID
             const clienteSalvo = getClienteSalvo(numeroLimpo);
             
             if (clienteSalvo && clienteSalvo.nome) {
@@ -376,7 +373,6 @@ client.on('message', async (msg) => {
                 session.motivo = "Retorno de Cliente: Continuidade de atendimento";
                 session.step = 'WAITING_FOR_SCHEDULING'; 
                 
-                // Usa o numeroLimpo validado para montar os links
                 const alertaInterno = `🚨 *CLIENTE RETORNANTE* 🚨\n\n` +
                                       `👤 *Nome:* ${session.clientName}\n` +
                                       `📝 *Pedido:* Continuidade de atendimento\n` +
@@ -492,14 +488,13 @@ client.on('message', async (msg) => {
             }
 
             if (!isBusinessHours()) {
-                await reply(`Perfeito! anotamos o seu caso.\nEm breve um de nossos especialistas entrará em contato.\n\n🕒 Nota: Estamos fora do horário comercial, responderemos assim que possível.');
+                await reply(`Perfeito! anotamos o seu caso.\nEm breve um de nossos especialistas entrará em contato.\n\n🕒 Nota: Estamos fora do horário comercial, responderemos assim que possível.`);
             } else {
                 await reply(`Maravilha, Estamos analisando seu caso.\nEm breve um de nossos especialistas entrará em contato.`);
             }
 
             await delay(1000); 
 
-            // Usa o numeroLimpo validado no lugar do ID cru
             salvarCliente(numeroLimpo, session.clientName);
 
             const alertaInterno = `🚨 *NOVA TRIAGEM FINALIZADA* 🚨\n\n` +
